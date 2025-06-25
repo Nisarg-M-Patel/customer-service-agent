@@ -1,0 +1,5 @@
+pydantic-settings
+pydantic
+google-cloud-aiplatform[adk,agent_engine]
+google-adk
+jsonschema
