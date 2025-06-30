@@ -22,6 +22,18 @@ class IntegrationManager:
         # Later this will check config and initialize real providers
         self._providers["mock"] = MockProvider()
         logger.info("Initialized mock provider")
+
+        #initialize shopify provider if configured
+        if self.config.INTEGRATION_MODE == "shopify":
+            if self.config.SHOPIFY_SHOP_DOMAIN and self.config.SHOPIFY_ACCESS_TOKEN:
+                from .shopify.provider import ShopifyProvider
+                self._providers["shopify"] = ShopifyProvider(
+                    self.config.SHOPIFY_SHOP_DOMAIN,
+                    self.config.SHOPIFY_ACCESS_TOKEN
+                )
+                logger.info("Initialized Shopify provider")
+            else:
+                logger.error("Shopify credentials not configured")
     
     def search_products(self, query: str = None, category: str = None, **filters) -> List[StandardProduct]:
         """Search for products using configured provider."""

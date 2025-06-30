@@ -32,3 +32,6 @@ class Config(BaseSettings):
     # Integration settings (will be used when we add real integrations)
     INTEGRATION_MODE: str = Field(default="mock")  # "mock" or "live"
     DATABASE_URL: str = Field(default="sqlite:///customer_service.db")
+
+    SHOPIFY_SHOP_DOMAIN: str = Field(default="")
+    SHOPIFY_ACCESS_TOKEN: str = Field(default="")
