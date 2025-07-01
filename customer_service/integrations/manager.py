@@ -65,6 +65,7 @@ class IntegrationManager:
         try:
             # Get primary data provider (Shopify or mock)
             primary_provider = self._get_primary_provider()
+            logger.info(f"Using primary provider for sync: {type(primary_provider).__name__}")
             
             # Check if sync is needed (could add timestamp checking here)
             logger.info("Checking if Elasticsearch sync is needed...")
@@ -136,3 +137,45 @@ class IntegrationManager:
             except Exception as e:
                 logger.error(f"Search suggestions failed: {e}")
         return []
+
+    def search_products_with_intent(self, query: str = None, intent_mode: bool = True, **filters):
+        """Search for products using intent analysis or fallback to keyword search."""
+        
+        # Try intent search first if available and enabled
+        if intent_mode and self._search_provider:
+            try:
+                intent_matches = self._search_provider.search_by_intent(query, **filters)
+                
+                if intent_matches:
+                    # Build enhanced results with metadata
+                    enhanced_results = []
+                    for match in intent_matches:
+                        product = self.get_product_by_id(match.product_id)
+                        if product:
+                            enhanced_results.append({
+                                "product": product,
+                                "confidence_score": match.confidence,
+                                "match_reasons": match.reasons
+                            })
+                    
+                    logger.info(f"Intent search returned {len(enhanced_results)} products")
+                    return enhanced_results
+                else:
+                    logger.info("Intent search returned no results, falling back to keyword search")
+                    
+            except Exception as e:
+                logger.error(f"Intent search failed, falling back to keyword search: {e}")
+        
+        # Fallback to regular keyword search - return products in same enhanced format
+        products = self.search_products(query=query, **filters)
+        
+        # Wrap regular products in enhanced format (no confidence scores)
+        enhanced_results = []
+        for product in products:
+            enhanced_results.append({
+                "product": product,
+                "confidence_score": None,
+                "match_reasons": ["keyword_match"]
+            })
+        
+        return enhanced_results

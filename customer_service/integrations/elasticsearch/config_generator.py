@@ -1,5 +1,5 @@
 # customer_service/integrations/elasticsearch/config_generator.py
-"""LLM-based configuration generator for Elasticsearch search setup."""
+"""LLM-based configuration generator for Elasticsearch search setup with automatic initialization."""
 
 import logging
 import re
@@ -11,7 +11,7 @@ from pathlib import Path
 from datetime import datetime
 from google import genai
 from google.genai.types import HttpOptions
-from ...database.models import StandardProduct
+from ...database.models import StandardProduct, IntentResult, ProblemVariation
 from ...config import Config
 
 logger = logging.getLogger(__name__)
@@ -20,12 +20,12 @@ class SearchConfigGenerator(ABC):
     """Abstract base class for search configuration generators."""
     
     @abstractmethod
-    def generate_config(self, sample_products: List[StandardProduct]) -> Dict:
+    def generate_config(self, sample_products: List[StandardProduct] = None) -> Dict:
         """Generate search configuration from sample products."""
         pass
 
 class LLMConfigGenerator(SearchConfigGenerator):
-    """Generates search configuration using LLM analysis of products."""
+    """Generates search configuration using LLM analysis of products with automatic initialization."""
     
     def __init__(self, config: Config):
         self.config = config
@@ -38,24 +38,42 @@ class LLMConfigGenerator(SearchConfigGenerator):
         )
         # Path to store the generated config
         self.config_file_path = Path(__file__).parent / "search_config.json"
+        # Path to store usage scenarios
+        self.usage_scenarios_file_path = Path(__file__).parent / "usage_scenarios.json"
     
-    def generate_config(self, sample_products: List[StandardProduct]) -> Dict:
+    def generate_config(self, sample_products: List[StandardProduct] = None) -> Dict:
         """
-        Analyze sample products with LLM to generate Elasticsearch config.
+        Analyze sample products with LLM to generate Elasticsearch config and usage scenarios.
+        If no products provided, fetch them automatically.
         
         Args:
-            sample_products: List of up to 30 sample products
+            sample_products: Optional list of products to analyze. If None, fetches automatically.
             
         Returns:
             Dictionary with search configuration
         """
-        logger.info(f"Generating search config from {len(sample_products)} sample products")
+        logger.info("Generating search config...")
         
         # Check if config already exists
         existing_config = self.load_config()
         if existing_config:
             logger.info("Using existing search config")
+            # Also check if we need to generate usage scenarios
+            if not self.usage_scenarios_exist():
+                logger.info("Generating missing usage scenarios...")
+                self._auto_generate_usage_scenarios()
             return existing_config
+        
+        # If no products provided, fetch them automatically
+        if sample_products is None:
+            logger.info("No products provided, fetching automatically...")
+            sample_products = self._fetch_products_automatically()
+        
+        if not sample_products:
+            logger.warning("No products available for config generation, using fallback")
+            fallback_config = self._get_fallback_config()
+            self._save_config(fallback_config)
+            return fallback_config
         
         try:
             # Limit to 30 products max
@@ -82,16 +100,322 @@ class LLMConfigGenerator(SearchConfigGenerator):
             # Save config to JSON file
             self._save_config(config)
             
+            # Generate and save usage scenarios for all products
+            logger.info("Generating usage scenarios for intent search...")
+            self._generate_and_save_usage_scenarios(sample_products)
+            
             return config
             
         except Exception as e:
             logger.error(f"Error generating config: {e}")
-            return self._get_fallback_config()
+            fallback_config = self._get_fallback_config()
+            self._save_config(fallback_config)
+            return fallback_config
+    
+    def _fetch_products_automatically(self) -> List[StandardProduct]:
+        """Automatically fetch products from available providers."""
+        try:
+            # Import here to avoid circular imports
+            from ..mock.provider import MockProvider
+            
+            # Use mock provider as fallback - it's always available
+            logger.info("Fetching products from mock provider for config generation...")
+            mock_provider = MockProvider()
+            products = mock_provider.search_products()
+            
+            if products:
+                logger.info(f"Fetched {len(products)} products from mock provider")
+                return products
+            
+            # Try to get from integration manager if available
+            try:
+                from ..manager import IntegrationManager
+                temp_manager = IntegrationManager(self.config)
+                primary_provider = temp_manager._get_primary_provider()
+                products = primary_provider.search_products()
+                
+                if products:
+                    logger.info(f"Fetched {len(products)} products from primary provider")
+                    return products
+                    
+            except Exception as e:
+                logger.warning(f"Could not fetch from primary provider: {e}")
+            
+            return []
+            
+        except Exception as e:
+            logger.error(f"Failed to auto-fetch products: {e}")
+            return []
+    
+    def _auto_generate_usage_scenarios(self):
+        """Auto-generate usage scenarios when config exists but scenarios don't."""
+        try:
+            products = self._fetch_products_automatically()
+            if products:
+                usage_scenarios_map = self.generate_usage_scenarios(products)
+                if usage_scenarios_map:
+                    self._save_usage_scenarios(usage_scenarios_map)
+                    logger.info(f"Auto-generated usage scenarios for {len(usage_scenarios_map)} products")
+                else:
+                    logger.warning("Failed to generate usage scenarios")
+            else:
+                logger.warning("No products available for usage scenario generation")
+        except Exception as e:
+            logger.error(f"Auto usage scenario generation failed: {e}")
+    
+    def _generate_and_save_usage_scenarios(self, products: List[StandardProduct]):
+        """Generate usage scenarios for products and save to file."""
+        try:
+            usage_scenarios_map = self.generate_usage_scenarios(products)
+            if usage_scenarios_map:
+                self._save_usage_scenarios(usage_scenarios_map)
+                logger.info(f"Generated usage scenarios for {len(usage_scenarios_map)} products")
+            else:
+                logger.warning("Failed to generate usage scenarios")
+        except Exception as e:
+            logger.error(f"Failed to generate usage scenarios: {e}")
+    
+    def analyze_intent(self, user_query: str) -> IntentResult:
+        """Analyze user query to extract intent and problems."""
+        
+        prompt = f"""
+        Analyze this customer query for gardening problems and intent:
+        
+        Query: "{user_query}"
+        
+        Extract:
+        1. Primary problem (single phrase like "weed_removal" or "plant_health_decline")
+        2. Context (plant types, garden areas, etc.)
+        3. Symptoms (visible issues mentioned)
+        4. Urgency (low/medium/high based on language used)
+        
+        Respond with JSON:
+        {{
+            "primary_problem": "main_issue_identified",
+            "context": ["relevant", "context", "terms"],
+            "symptoms": ["symptoms", "mentioned"],
+            "urgency": "medium"
+        }}
+        """
+        
+        try:
+            response = self.client.models.generate_content(
+                model="gemini-2.0-flash-exp",
+                contents=prompt
+            )
+            
+            result_text = response.text.strip()
+            
+            # Extract JSON from response
+            if "```json" in result_text:
+                result_text = result_text.split("```json")[1].split("```")[0]
+            elif "```" in result_text:
+                result_text = result_text.split("```")[1].split("```")[0]
+            
+            intent_data = json.loads(result_text)
+            
+            return IntentResult(
+                primary_problem=intent_data.get("primary_problem", "general_gardening"),
+                context=intent_data.get("context", []),
+                symptoms=intent_data.get("symptoms", []),
+                urgency=intent_data.get("urgency", "medium")
+            )
+            
+        except Exception as e:
+            logger.error(f"Intent analysis failed: {e}")
+            # Fallback intent
+            return IntentResult(
+                primary_problem="general_gardening",
+                context=[],
+                symptoms=[],
+                urgency="medium"
+            )
+
+    def expand_problems(self, intent: IntentResult) -> List[ProblemVariation]:
+        """Expand primary problem into related problem variations."""
+        
+        prompt = f"""
+        Given this gardening problem, generate 4-5 related problems that might be causing it:
+        
+        Primary Problem: {intent.primary_problem}
+        Context: {', '.join(intent.context)}
+        Symptoms: {', '.join(intent.symptoms)}
+        
+        Generate related problems with confidence scores (0.1-1.0):
+        - Include the original problem with high confidence
+        - Add broader categories and specific variations
+        - Consider root causes and related issues
+        
+        Example format:
+        [
+            {{"problem": "nutrient_deficiency", "confidence": 0.9, "category": "feeding"}},
+            {{"problem": "overwatering", "confidence": 0.7, "category": "watering"}},
+            {{"problem": "soil_ph_imbalance", "confidence": 0.6, "category": "soil"}}
+        ]
+        
+        Respond with only the JSON array.
+        """
+        
+        try:
+            response = self.client.models.generate_content(
+                model="gemini-2.0-flash-exp",
+                contents=prompt
+            )
+            
+            result_text = response.text.strip()
+            
+            # Extract JSON from response
+            if "```json" in result_text:
+                result_text = result_text.split("```json")[1].split("```")[0]
+            elif "```" in result_text:
+                result_text = result_text.split("```")[1].split("```")[0]
+            
+            problems_data = json.loads(result_text)
+            
+            return [
+                ProblemVariation(
+                    problem=p.get("problem", ""),
+                    confidence=p.get("confidence", 0.5),
+                    category=p.get("category", "general")
+                )
+                for p in problems_data
+            ]
+            
+        except Exception as e:
+            logger.error(f"Problem expansion failed: {e}")
+            # Fallback to original problem
+            return [ProblemVariation(
+                problem=intent.primary_problem,
+                confidence=1.0,
+                category="general"
+            )]
+
+    def generate_usage_scenarios(self, products: List[StandardProduct]) -> Dict[str, List[str]]:
+        """Generate usage scenarios for products using LLM analysis."""
+        
+        logger.info(f"Generating usage scenarios for {len(products)} products...")
+        
+        # Check if we have cached scenarios first
+        existing_scenarios = self.load_usage_scenarios()
+        if existing_scenarios:
+            logger.info("Using existing usage scenarios")
+            return existing_scenarios
+        
+        # Process products in batches to avoid token limits
+        batch_size = 5
+        all_usage_scenarios = {}
+        
+        for i in range(0, len(products), batch_size):
+            batch = products[i:i + batch_size]
+            
+            # Prepare batch data
+            product_data = []
+            for product in batch:
+                product_data.append({
+                    "id": product.id,
+                    "title": product.title,
+                    "description": product.description[:200] if product.description else "",
+                    "tags": product.tags,
+                    "categories": product.categories
+                })
+            
+            prompt = f"""
+            Analyze these garden products and generate 3-5 SHORT problem keywords each product solves.
+
+            Products: {json.dumps(product_data, indent=2)}
+
+            For each product, generate 3-5 SINGLE WORDS or SHORT PHRASES (max 2-3 words):
+            - Use underscore format: "weed_removal", "nutrient_deficiency", "poor_drainage"
+            - NO sentences, NO explanations, NO "addresses the problem of"
+            - Think: what would someone type when searching for a solution?
+
+            Examples:
+            - Fertilizer: ["nutrient_deficiency", "yellowing_leaves", "poor_growth", "plant_feeding"]
+            - Trowel: ["transplanting", "weed_removal", "small_digging", "garden_maintenance"]
+            - Seeds: ["vegetable_growing", "food_production", "garden_starting"]
+
+            Respond with JSON - ONLY short problem keywords:
+            {{
+                "product_id_1": ["keyword1", "keyword2", "keyword3"],
+                "product_id_2": ["keyword1", "keyword2", "keyword3"]
+            }}
+            """
+            
+            try:
+                response = self.client.models.generate_content(
+                    model="gemini-2.0-flash-exp",
+                    contents=prompt
+                )
+                
+                result_text = response.text.strip()
+                
+                # Extract JSON from response
+                if "```json" in result_text:
+                    result_text = result_text.split("```json")[1].split("```")[0]
+                elif "```" in result_text:
+                    result_text = result_text.split("```")[1].split("```")[0]
+                
+                batch_scenarios = json.loads(result_text)
+                all_usage_scenarios.update(batch_scenarios)
+                
+                logger.info(f"Generated scenarios for batch {i//batch_size + 1}")
+                
+            except Exception as e:
+                logger.error(f"Usage scenario generation failed for batch: {e}")
+                # Add fallback scenarios for this batch
+                for product in batch:
+                    all_usage_scenarios[product.id] = ["general_gardening", "garden_maintenance"]
+        
+        return all_usage_scenarios
+    
+    def load_usage_scenarios(self) -> Optional[Dict[str, List[str]]]:
+        """Load existing usage scenarios from JSON file."""
+        try:
+            if self.usage_scenarios_file_path.exists():
+                with open(self.usage_scenarios_file_path, 'r') as f:
+                    data = json.load(f)
+                
+                # Handle both old format (direct dict) and new format (with metadata)
+                if "scenarios" in data:
+                    scenarios = data["scenarios"]
+                else:
+                    scenarios = data
+                    
+                logger.info(f"Loaded existing usage scenarios for {len(scenarios)} products")
+                return scenarios
+        except Exception as e:
+            logger.error(f"Error loading usage scenarios: {e}")
+        return None
+    
+    def _save_usage_scenarios(self, scenarios: Dict[str, List[str]]):
+        """Save usage scenarios to JSON file."""
+        try:
+            # Ensure directory exists
+            self.usage_scenarios_file_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Save scenarios with timestamp
+            scenarios_with_meta = {
+                "scenarios": scenarios,
+                "generated_at": str(datetime.now()),
+                "product_count": len(scenarios)
+            }
+            
+            with open(self.usage_scenarios_file_path, 'w') as f:
+                json.dump(scenarios_with_meta, f, indent=2)
+                
+            logger.info(f"Saved usage scenarios to {self.usage_scenarios_file_path}")
+            
+        except Exception as e:
+            logger.error(f"Error saving usage scenarios: {e}")
+    
+    def usage_scenarios_exist(self) -> bool:
+        """Check if usage scenarios file exists."""
+        return self.usage_scenarios_file_path.exists()
     
     def _generate_index_name(self, products: List[StandardProduct]) -> str:
         """Generate index name from categories or LLM analysis."""
         
-        # Extract Shopify categories
+        # Extract categories
         all_categories = []
         for product in products:
             all_categories.extend(product.categories)
@@ -123,7 +447,7 @@ class LLMConfigGenerator(SearchConfigGenerator):
         return "products"
     
     def _categorize_business_from_categories(self, categories: List[str]) -> Optional[str]:
-        """Infer business type from Shopify categories."""
+        """Infer business type from categories."""
         categories_lower = [cat.lower() for cat in categories]
         
         # Garden center indicators
@@ -335,7 +659,13 @@ class LLMConfigGenerator(SearchConfigGenerator):
         """Check if search config file exists."""
         return self.config_file_path.exists()
     
-    def regenerate_config(self, sample_products: List[StandardProduct]) -> Dict:
+    def regenerate_config(self, sample_products: List[StandardProduct] = None) -> Dict:
         """Force regeneration of config (ignores existing file)."""
         logger.info("Force regenerating search config...")
+        # Delete existing files
+        if self.config_file_path.exists():
+            self.config_file_path.unlink()
+        if self.usage_scenarios_file_path.exists():
+            self.usage_scenarios_file_path.unlink()
+        
         return self.generate_config(sample_products)

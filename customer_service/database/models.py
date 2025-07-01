@@ -1,4 +1,4 @@
-"""Data models for the customer service agent."""
+# Add this to customer_service/database/models.py
 
 from typing import List, Dict, Optional, Any
 from datetime import datetime
@@ -17,6 +17,7 @@ class StandardProduct(BaseModel):
     categories: List[str] = []
     images: List[str] = []
     availability: bool = True
+    usage_scenarios: List[str] = [] 
     created_at: datetime
     updated_at: datetime
 
@@ -41,3 +42,25 @@ class StoreConfiguration(BaseModel):
     customer_integration: str = "mock"  # "salesforce", "hubspot", etc.
     integration_config: Dict[str, Any] = {}
     created_at: datetime
+
+# Add new data models for intent system
+class IntentResult(BaseModel):
+    """Result of intent analysis."""
+    primary_problem: str
+    context: List[str] = []
+    symptoms: List[str] = []
+    urgency: str = "medium"  # low, medium, high
+
+class ProblemVariation(BaseModel):
+    """Expanded problem variation."""
+    problem: str
+    confidence: float
+    category: str = "general"
+
+class ProductMatch(BaseModel):
+    """Product match with confidence scoring."""
+    product_id: str
+    product_title: str
+    confidence: float
+    reasons: List[str] = []
+    price: float

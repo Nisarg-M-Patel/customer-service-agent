@@ -46,25 +46,66 @@ def get_product_recommendations(plant_type: str, customer_id: str) -> dict:
         logger.error(f"Error getting product recommendations: {e}")
         return {"recommendations": [], "error": str(e)}
 
-def search_products(query: str, category: Optional[str]=None) -> dict:
+def search_products(query: str, category: Optional[str] = None, intent_mode: bool = True) -> dict:
     """
-    Search for products by query and optional category.
+    Search for products by query and optional category, with optional intent analysis.
     
     Args:
         query: Search query
         category: Optional category filter
+        intent_mode: Whether to use intent-based search (default: True)
         
     Returns:
-        Dictionary with search results
+        Dictionary with search results including confidence metadata for intent searches
     """
-    logger.info(f"Searching products: query='{query}', category='{category}'")
+    logger.info(f"Searching products: query='{query}', category='{category}', intent_mode={intent_mode}")
     
     try:
+        # Use intent search if enabled, otherwise fall back to keyword search
+        if intent_mode:
+            enhanced_results = integration_manager.search_products_with_intent(
+                query=query, 
+                category=category, 
+                intent_mode=True
+            )
+            
+            # Handle enhanced results with metadata
+            if enhanced_results and isinstance(enhanced_results[0], dict) and "product" in enhanced_results[0]:
+                formatted_results = []
+                for item in enhanced_results:
+                    product = item["product"]
+                    result = {
+                        "product_id": product.id,
+                        "name": product.title,
+                        "description": product.description,
+                        "price": product.price,
+                        "sku": product.sku,
+                        "availability": product.availability,
+                        "tags": product.tags
+                    }
+                    
+                    # Add intent search metadata if available
+                    if item.get("confidence_score") is not None:
+                        result["confidence_score"] = round(item["confidence_score"], 2)
+                        result["match_reasons"] = item.get("match_reasons", [])
+                    
+                    formatted_results.append(result)
+                
+                return {
+                    "results": formatted_results,
+                    "total": len(formatted_results),
+                    "query": query,
+                    "category": category,
+                    "search_mode": "intent"
+                }
+        
+        # Fallback to keyword-only search
         products = integration_manager.search_products(query=query, category=category)
         
+        # Format regular products
         results = []
         for product in products:
-            results.append({
+            result = {
                 "product_id": product.id,
                 "name": product.title,
                 "description": product.description,
@@ -72,18 +113,20 @@ def search_products(query: str, category: Optional[str]=None) -> dict:
                 "sku": product.sku,
                 "availability": product.availability,
                 "tags": product.tags
-            })
+            }
+            results.append(result)
         
         return {
             "results": results,
             "total": len(results),
             "query": query,
-            "category": category
+            "category": category,
+            "search_mode": "keyword"
         }
         
     except Exception as e:
         logger.error(f"Error searching products: {e}")
-        return {"results": [], "error": str(e)}
+        return {"results": [], "error": str(e), "search_mode": "error"}
 
 def get_product_details(product_id: str) -> dict:
     """
