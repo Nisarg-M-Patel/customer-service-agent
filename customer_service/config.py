@@ -1,3 +1,4 @@
+# customer_service/config.py
 import os
 import logging
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -29,9 +30,21 @@ class Config(BaseSettings):
     GENAI_USE_VERTEXAI: str = Field(default="1")
     API_KEY: str | None = Field(default="")
     
-    # Integration settings (will be used when we add real integrations)
-    INTEGRATION_MODE: str = Field(default="mock")  # "mock" or "live"
+    # Integration settings
+    INTEGRATION_MODE: str = Field(default="mock")  # "mock", "elasticsearch", "shopify"
     DATABASE_URL: str = Field(default="sqlite:///customer_service.db")
-
-    SHOPIFY_SHOP_DOMAIN: str = Field(default="")
-    SHOPIFY_ACCESS_TOKEN: str = Field(default="")
+    
+    # Elasticsearch settings
+    ELASTICSEARCH_URL: str = Field(default="http://localhost:9200")
+    ELASTICSEARCH_USER: str | None = Field(default=None)
+    ELASTICSEARCH_PASSWORD: str | None = Field(default=None)
+    ELASTICSEARCH_VERIFY_CERTS: bool = Field(default=True)
+    
+    # Shopify settings (for syncing data to Elasticsearch)
+    SHOPIFY_SHOP_URL: str | None = Field(default=None)
+    SHOPIFY_ACCESS_TOKEN: str | None = Field(default=None)
+    
+    # Search configuration
+    SEARCH_PROVIDER: str = Field(default="elasticsearch")  # "mock", "elasticsearch", "shopify"
+    ENABLE_SEARCH_SUGGESTIONS: bool = Field(default=True)
+    MAX_SEARCH_RESULTS: int = Field(default=20)

@@ -1,0 +1,58 @@
+{
+  "index_name": "garden_products",
+  "business_type": "garden_center",
+  "searchable_fields": {
+    "title": {
+      "weight": 3.0,
+      "fuzzy": true
+    },
+    "description": {
+      "weight": 1.5,
+      "fuzzy": true
+    },
+    "tags": {
+      "weight": 2.5,
+      "fuzzy": false
+    },
+    "categories": {
+      "weight": 2.0,
+      "fuzzy": false
+    }
+  },
+  "synonym_groups": [
+    "seeds,seed",
+    "plants,plant",
+    "tools,equipment,gear",
+    "fertilizer,plant food,plant food,nutrients,feed",
+    "soil,dirt,potting mix,growing medium",
+    "watering,irrigation",
+    "gloves,hand protection",
+    "stakes,supports",
+    "accessories,supplies",
+    "shears,clippers,pruners",
+    "kits,sets",
+    "wildlife,birds,butterflies,insects",
+    "vegetables,veggies",
+    "tomatoes,tomato"
+  ],
+  "search_settings": {
+    "fuzzy_distance": 2,
+    "minimum_should_match": "60%",
+    "boost_exact_matches": true
+  },
+  "domain_keywords": [
+    "gardening",
+    "plants",
+    "outdoor",
+    "growing",
+    "garden",
+    "seeds",
+    "tools",
+    "watering",
+    "fertilizers",
+    "soil",
+    "composting"
+  ],
+  "generated_at": "2025-07-01 13:09:25.214122",
+  "product_count_analyzed": 30
+}
