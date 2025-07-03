@@ -17,6 +17,10 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# Module-level singleton variables
+_instance = None
+_config_hash = None
+
 class IntegrationManager:
     """Manages all integrations and routes requests to appropriate providers."""
     
@@ -25,6 +29,23 @@ class IntegrationManager:
         self._providers = {}
         self._search_provider = None
         self._initialize_providers()
+
+    @classmethod
+    def get_instance(cls) -> 'IntegrationManager':
+        """Get singleton instance of IntegrationManager."""
+        global _instance, _config_hash
+        
+        # Create config to check if it changed
+        config = Config()
+        current_config_hash = hash(f"{config.INTEGRATION_MODE}_{config.DATABASE_URL}")
+        
+        # Create new instance if none exists or config changed
+        if _instance is None or _config_hash != current_config_hash:
+            logger.info("Creating new IntegrationManager instance")
+            _instance = cls(config)
+            _config_hash = current_config_hash
+        
+        return _instance
     
     def _initialize_providers(self):
         """Initialize configured providers."""
@@ -36,7 +57,10 @@ class IntegrationManager:
         if hasattr(self.config, 'SHOPIFY_SHOP_URL') and self.config.SHOPIFY_SHOP_URL:
             try:
                 from .shopify.provider import ShopifyProvider
-                self._providers["shopify"] = ShopifyProvider(self.config)
+                self._providers["shopify"] = ShopifyProvider(
+                    shop_domain=self.config.SHOPIFY_SHOP_URL,
+                    access_token=self.config.SHOPIFY_ACCESS_TOKEN
+                    )
                 logger.info("Initialized Shopify provider")
             except ImportError:
                 logger.warning("Shopify provider not available")

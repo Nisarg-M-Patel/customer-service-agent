@@ -19,6 +19,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module=".*pydantic.*")
 
 config = Config()
 logger = logging.getLogger(__name__)
+logger.info("Initializing customer service agent prior to user invocation")
 
 # Create the agent with all tools
 root_agent = Agent(

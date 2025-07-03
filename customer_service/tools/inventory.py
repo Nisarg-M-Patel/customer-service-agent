@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 # Initialize integration manager
 config = Config()
-integration_manager = IntegrationManager(config)
+integration_manager = IntegrationManager.get_instance()
 
 def check_product_availability(product_id: str, store_id: Optional[str] = None) -> dict:
     """

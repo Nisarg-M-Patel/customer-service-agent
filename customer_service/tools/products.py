@@ -2,31 +2,29 @@
 
 import logging
 from typing import Optional
-from ..config import Config
 from ..integrations.manager import IntegrationManager
 
 logger = logging.getLogger(__name__)
 
-# Initialize integration manager
-config = Config()
-integration_manager = IntegrationManager(config)
-
-def get_product_recommendations(plant_type: str, customer_id: str) -> dict:
+def get_product_recommendations(query: str, customer_id: str) -> dict:
     """
-    Get product recommendations based on plant type.
+    Get product recommendations based on search query.
     
     Args:
-        plant_type: Type of plant customer is interested in
+        query: Search query for products customer is interested in
         customer_id: Customer ID for personalization
         
     Returns:
         Dictionary with product recommendations
     """
-    logger.info(f"Getting recommendations for plant type: {plant_type}, customer: {customer_id}")
+    logger.info(f"Getting recommendations for query: {query}, customer: {customer_id}")
     
     try:
-        # Search for products related to the plant type
-        products = integration_manager.search_products(query=plant_type)
+        # Get singleton integration manager instance
+        integration_manager = IntegrationManager.get_instance()
+        
+        # Search for products related to the query
+        products = integration_manager.search_products(query=query)
         
         # Format recommendations
         recommendations = []
@@ -46,66 +44,28 @@ def get_product_recommendations(plant_type: str, customer_id: str) -> dict:
         logger.error(f"Error getting product recommendations: {e}")
         return {"recommendations": [], "error": str(e)}
 
-def search_products(query: str, category: Optional[str] = None, intent_mode: bool = True) -> dict:
+def search_products(query: str, category: Optional[str]=None) -> dict:
     """
-    Search for products by query and optional category, with optional intent analysis.
+    Search for products by query and optional category.
     
     Args:
         query: Search query
         category: Optional category filter
-        intent_mode: Whether to use intent-based search (default: True)
         
     Returns:
-        Dictionary with search results including confidence metadata for intent searches
+        Dictionary with search results
     """
-    logger.info(f"Searching products: query='{query}', category='{category}', intent_mode={intent_mode}")
+    logger.info(f"Searching products: query='{query}', category='{category}'")
     
     try:
-        # Use intent search if enabled, otherwise fall back to keyword search
-        if intent_mode:
-            enhanced_results = integration_manager.search_products_with_intent(
-                query=query, 
-                category=category, 
-                intent_mode=True
-            )
-            
-            # Handle enhanced results with metadata
-            if enhanced_results and isinstance(enhanced_results[0], dict) and "product" in enhanced_results[0]:
-                formatted_results = []
-                for item in enhanced_results:
-                    product = item["product"]
-                    result = {
-                        "product_id": product.id,
-                        "name": product.title,
-                        "description": product.description,
-                        "price": product.price,
-                        "sku": product.sku,
-                        "availability": product.availability,
-                        "tags": product.tags
-                    }
-                    
-                    # Add intent search metadata if available
-                    if item.get("confidence_score") is not None:
-                        result["confidence_score"] = round(item["confidence_score"], 2)
-                        result["match_reasons"] = item.get("match_reasons", [])
-                    
-                    formatted_results.append(result)
-                
-                return {
-                    "results": formatted_results,
-                    "total": len(formatted_results),
-                    "query": query,
-                    "category": category,
-                    "search_mode": "intent"
-                }
+        # Get singleton integration manager instance
+        integration_manager = IntegrationManager.get_instance()
         
-        # Fallback to keyword-only search
         products = integration_manager.search_products(query=query, category=category)
         
-        # Format regular products
         results = []
         for product in products:
-            result = {
+            results.append({
                 "product_id": product.id,
                 "name": product.title,
                 "description": product.description,
@@ -113,20 +73,18 @@ def search_products(query: str, category: Optional[str] = None, intent_mode: boo
                 "sku": product.sku,
                 "availability": product.availability,
                 "tags": product.tags
-            }
-            results.append(result)
+            })
         
         return {
             "results": results,
             "total": len(results),
             "query": query,
-            "category": category,
-            "search_mode": "keyword"
+            "category": category
         }
         
     except Exception as e:
         logger.error(f"Error searching products: {e}")
-        return {"results": [], "error": str(e), "search_mode": "error"}
+        return {"results": [], "error": str(e)}
 
 def get_product_details(product_id: str) -> dict:
     """
@@ -141,6 +99,9 @@ def get_product_details(product_id: str) -> dict:
     logger.info(f"Getting product details for: {product_id}")
     
     try:
+        # Get singleton integration manager instance
+        integration_manager = IntegrationManager.get_instance()
+        
         product = integration_manager.get_product_by_id(product_id)
         
         if not product:

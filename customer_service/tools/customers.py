@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 # Initialize integration manager
 config = Config()
-integration_manager = IntegrationManager(config)
+integration_manager = IntegrationManager.get_instance()
 
 def get_customer_info(customer_id: str) -> dict:
     """
