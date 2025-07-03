@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Customer Service API Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 1000px; margin: 50px auto; }
+        button { padding: 10px 20px; margin: 10px; }
+        input { padding: 10px; margin: 10px; width: 400px; }
+        pre { background: #f5f5f5; padding: 10px; border-radius: 5px; }
+        .status { padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .ready { background: #d4edda; }
+        .not-ready { background: #f8d7da; }
+        .section { border: 2px solid #007bff; padding: 15px; margin: 20px 0; border-radius: 5px; }
+        .debug-section { border-color: #17a2b8; }
+        .results-section { border-color: #28a745; }
+        .error { color: #dc3545; font-weight: bold; }
+        .success { color: #28a745; font-weight: bold; }
+        .warning { color: #ffc107; font-weight: bold; }
+        .expandable { cursor: pointer; background: #e9ecef; padding: 5px; margin: 5px 0; border-radius: 3px; }
+        .content-box { border-left: 3px solid #007bff; padding-left: 10px; margin: 10px 0; }
+        .intent-box { border-left-color: #28a745; }
+        .es-box { border-left-color: #ffc107; }
+        .results-box { border-left-color: #dc3545; }
+    </style>
+</head>
+<body>
+    <h1>Customer Service API Comprehensive Test</h1>
+    
+    <div class="section">
+        <h3>🏥 Basic Health Checks</h3>
+        <button onclick="checkHealth()">Check Health</button>
+        <button onclick="checkReady()">Check Ready</button>
+        <button onclick="forceInit()">Force Initialize</button>
+    </div>
+    
+    <div class="section debug-section">
+        <h3>🔍 Comprehensive Debug</h3>
+        <p>This will test the entire search pipeline: Intent Analysis → Elasticsearch → Final Results</p>
+        <input type="text" id="comprehensiveQuery" placeholder="Enter search query..." value="My plants are sitting in water and won't drain">
+        <button onclick="comprehensiveDebug()">🚀 Full Pipeline Debug</button>
+    </div>
+    
+    <div id="results"></div>
+
+    <script>
+        const API_BASE = 'http://localhost:8001';
+        
+        async function checkHealth() {
+            try {
+                const response = await fetch(`${API_BASE}/api/health`);
+                const data = await response.json();
+                showSimpleResult('Health Check', data, response.ok);
+            } catch (error) {
+                showSimpleResult('Health Check', {error: error.message}, false);
+            }
+        }
+        
+        async function checkReady() {
+            try {
+                const response = await fetch(`${API_BASE}/api/ready`);
+                const data = await response.json();
+                showSimpleResult('Ready Check', data, response.ok);
+                
+                const statusDiv = document.createElement('div');
+                statusDiv.className = `status ${data.ready ? 'ready' : 'not-ready'}`;
+                statusDiv.innerHTML = data.ready ? 
+                    `✅ Agent Ready! Found ${data.product_count} products` : 
+                    `❌ Agent Not Ready: ${data.reason}`;
+                document.getElementById('results').appendChild(statusDiv);
+                
+            } catch (error) {
+                showSimpleResult('Ready Check', {error: error.message}, false);
+            }
+        }
+        
+        async function forceInit() {
+            try {
+                showSimpleResult('Initializing...', {message: 'Starting initialization...'}, true);
+                
+                const response = await fetch(`${API_BASE}/api/initialize`, {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                showSimpleResult('Force Initialize', data, response.ok);
+                
+            } catch (error) {
+                showSimpleResult('Force Initialize', {error: error.message}, false);
+            }
+        }
+        
+        async function comprehensiveDebug() {
+            const query = document.getElementById('comprehensiveQuery').value.trim();
+            if (!query) {
+                alert('Please enter a search query');
+                return;
+            }
+            
+            try {
+                showSimpleResult('🚀 Comprehensive Debug', {message: `Running full pipeline for: "${query}"`}, true);
+                
+                const response = await fetch(`${API_BASE}/api/debug-comprehensive/${encodeURIComponent(query)}`);
+                const data = await response.json();
+                
+                showComprehensiveResult('Comprehensive Debug Results', data, response.ok);
+                
+            } catch (error) {
+                showSimpleResult('Comprehensive Debug', {error: error.message}, false);
+            }
+        }
+        
+        function showSimpleResult(title, data, success) {
+            const results = document.getElementById('results');
+            const div = document.createElement('div');
+            div.innerHTML = `
+                <h3>${title} ${success ? '✅' : '❌'}</h3>
+                <pre>${JSON.stringify(data, null, 2)}</pre>
+            `;
+            results.appendChild(div);
+        }
+        
+        function showComprehensiveResult(title, data, success) {
+            const results = document.getElementById('results');
+            const div = document.createElement('div');
+            div.className = 'results-section section';
+            
+            let html = `<h2>${title} ${success ? '✅' : '❌'}</h2>`;
+            
+            // Show errors first if any
+            if (data.errors && data.errors.length > 0) {
+                html += `<div class="error">⚠️ Errors Found:</div>`;
+                data.errors.forEach(error => {
+                    html += `<div class="error">• ${error}</div>`;
+                });
+            }
+            
+            // Integration Status
+            if (data.integration_status) {
+                const status = data.integration_status;
+                html += `<div class="content-box">`;
+                html += `<h4>🔧 Integration Status</h4>`;
+                html += `<div>Providers: ${status.providers.join(', ')}</div>`;
+                html += `<div>Search Provider: ${status.has_search_provider ? '✅ ' + status.search_provider_type : '❌ None'}</div>`;
+                html += `<div>Config: ${status.config_search_provider}</div>`;
+                html += `</div>`;
+            }
+            
+            // Intent Analysis
+            if (data.intent_analysis && data.intent_analysis.detected_intent) {
+                const intent = data.intent_analysis;
+                html += `<div class="content-box intent-box">`;
+                html += `<h4>🧠 Intent Analysis</h4>`;
+                html += `<div><strong>Primary Problem:</strong> ${intent.detected_intent.primary_problem}</div>`;
+                html += `<div><strong>Context:</strong> ${intent.detected_intent.context.join(', ')}</div>`;
+                html += `<div><strong>Symptoms:</strong> ${intent.detected_intent.symptoms.join(', ')}</div>`;
+                
+                if (intent.problem_variations && intent.problem_variations.length > 0) {
+                    html += `<div><strong>Problem Variations (${intent.problem_variations.length}):</strong></div>`;
+                    intent.problem_variations.forEach((variation, i) => {
+                        html += `<div style="margin-left: 20px;">${i+1}. ${variation.problem} (${variation.confidence})</div>`;
+                    });
+                }
+                
+                if (intent.matching_products && intent.matching_products.length > 0) {
+                    html += `<div class="success">✅ Found ${intent.matching_products.length} matching products in scenarios</div>`;
+                } else {
+                    html += `<div class="error">❌ No matching products found in scenarios</div>`;
+                }
+                html += `</div>`;
+            }
+            
+            // Elasticsearch Debug
+            if (data.elasticsearch_debug) {
+                const es = data.elasticsearch_debug;
+                html += `<div class="content-box es-box">`;
+                html += `<h4>🔍 Elasticsearch Debug</h4>`;
+                html += `<div><strong>Index:</strong> ${es.index_name}</div>`;
+                
+                if (es.expected_products_in_es && es.expected_products_in_es.length > 0) {
+                    html += `<div><strong>Expected Products in ES:</strong></div>`;
+                    es.expected_products_in_es.forEach(product => {
+                        if (product.found !== false) {
+                            html += `<div style="margin-left: 20px;" class="success">✅ ${product.id}: ${product.title}</div>`;
+                            html += `<div style="margin-left: 40px; font-size: 0.9em;">Scenarios: ${product.usage_scenarios}</div>`;
+                        } else {
+                            html += `<div style="margin-left: 20px;" class="error">❌ ${product.id}: Not found in ES</div>`;
+                        }
+                    });
+                }
+                
+                if (es.direct_search_results && es.direct_search_results.length > 0) {
+                    html += `<div class="success">✅ Direct ES search found ${es.direct_search_results.length} results</div>`;
+                } else {
+                    html += `<div class="error">❌ Direct ES search found no results</div>`;
+                }
+                html += `</div>`;
+            }
+            
+            // Final Search Results
+            if (data.search_results) {
+                const results = data.search_results;
+                html += `<div class="content-box results-box">`;
+                html += `<h4>🎯 Final Search Results</h4>`;
+                
+                if (results.intent_results && results.intent_results.length > 0) {
+                    html += `<div class="success">✅ Intent Search: ${results.intent_results.length} results</div>`;
+                    results.intent_results.forEach((result, i) => {
+                        html += `<div style="margin-left: 20px;">${i+1}. ${result.product_title} (${result.confidence})</div>`;
+                    });
+                } else {
+                    html += `<div class="error">❌ Intent Search: 0 results</div>`;
+                }
+                
+                if (results.keyword_results && results.keyword_results.length > 0) {
+                    html += `<div class="success">✅ Keyword Search: ${results.keyword_results.length} results</div>`;
+                } else {
+                    html += `<div class="error">❌ Keyword Search: 0 results</div>`;
+                }
+                html += `</div>`;
+            }
+            
+            // Raw data
+            html += `<details style="margin-top: 20px;"><summary>📋 Raw Debug Data</summary><pre>${JSON.stringify(data, null, 2)}</pre></details>`;
+            
+            div.innerHTML = html;
+            results.appendChild(div);
+        }
+        
+        // Auto-check health on load
+        checkHealth();
+    </script>
+</body>
+</html>
