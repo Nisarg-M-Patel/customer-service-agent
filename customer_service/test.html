@@ -12,6 +12,7 @@
         .not-ready { background: #f8d7da; }
         .section { border: 2px solid #007bff; padding: 15px; margin: 20px 0; border-radius: 5px; }
         .debug-section { border-color: #17a2b8; }
+        .vector-section { border-color: #6f42c1; }
         .results-section { border-color: #28a745; }
         .error { color: #dc3545; font-weight: bold; }
         .success { color: #28a745; font-weight: bold; }
@@ -20,6 +21,7 @@
         .content-box { border-left: 3px solid #007bff; padding-left: 10px; margin: 10px 0; }
         .intent-box { border-left-color: #28a745; }
         .es-box { border-left-color: #ffc107; }
+        .vector-box { border-left-color: #6f42c1; }
         .results-box { border-left-color: #dc3545; }
     </style>
 </head>
@@ -38,6 +40,13 @@
         <p>This will test the entire search pipeline: Intent Analysis → Elasticsearch → Final Results</p>
         <input type="text" id="comprehensiveQuery" placeholder="Enter search query..." value="My plants are sitting in water and won't drain">
         <button onclick="comprehensiveDebug()">🚀 Full Pipeline Debug</button>
+    </div>
+    
+    <div class="section vector-section">
+        <h3>🔬 Vector Search Testing</h3>
+        <p>Test the new vector-based semantic search functionality</p>
+        <input type="text" id="vectorQuery" placeholder="Enter search query..." value="my plants have yellow leaves and are dying">
+        <button onclick="testVectorSearch()">🚀 Test Vector Search</button>
     </div>
     
     <div id="results"></div>
@@ -108,6 +117,26 @@
             }
         }
         
+        async function testVectorSearch() {
+            const query = document.getElementById('vectorQuery').value.trim();
+            if (!query) {
+                alert('Please enter a search query');
+                return;
+            }
+            
+            try {
+                showSimpleResult('🔬 Vector Search Test', {message: `Testing vector search for: "${query}"`}, true);
+                
+                const response = await fetch(`${API_BASE}/api/test-vector-search/${encodeURIComponent(query)}`);
+                const data = await response.json();
+                
+                showVectorSearchResult('Vector Search Test Results', data, response.ok);
+                
+            } catch (error) {
+                showSimpleResult('Vector Search Test', {error: error.message}, false);
+            }
+        }
+        
         function showSimpleResult(title, data, success) {
             const results = document.getElementById('results');
             const div = document.createElement('div');
@@ -115,6 +144,67 @@
                 <h3>${title} ${success ? '✅' : '❌'}</h3>
                 <pre>${JSON.stringify(data, null, 2)}</pre>
             `;
+            results.appendChild(div);
+        }
+        
+        function showVectorSearchResult(title, data, success) {
+            const results = document.getElementById('results');
+            const div = document.createElement('div');
+            div.className = 'results-section section';
+            
+            let html = `<h2>${title} ${success ? '✅' : '❌'}</h2>`;
+            
+            if (data.error) {
+                html += `<div class="error">❌ Error: ${data.error}</div>`;
+            } else {
+                // Comparison summary
+                if (data.comparison) {
+                    const comp = data.comparison;
+                    html += `<div class="content-box">`;
+                    html += `<h4>📊 Search Comparison</h4>`;
+                    html += `<div>Vector Search: ${comp.vector_count} results</div>`;
+                    html += `<div>Keyword Search: ${comp.keyword_count} results</div>`;
+                    html += `<div class="${comp.vector_better ? 'success' : 'warning'}">Vector search ${comp.vector_better ? 'performed better' : 'performed similarly'}</div>`;
+                    html += `</div>`;
+                }
+                
+                // Vector search results
+                if (data.vector_search_results && data.vector_search_results.length > 0) {
+                    html += `<div class="content-box vector-box">`;
+                    html += `<h4>🤖 Vector Search Results (${data.vector_search_results.length})</h4>`;
+                    data.vector_search_results.forEach((result, i) => {
+                        html += `<div style="margin-left: 20px; border-left: 3px solid #6f42c1; padding-left: 10px; margin-bottom: 10px;">`;
+                        html += `<div><strong>${i+1}. ${result.product_title}</strong> (${result.confidence.toFixed(3)})</div>`;
+                        html += `<div>ID: ${result.product_id} | Price: $${result.price}</div>`;
+                        html += `<div>Reasons: ${result.reasons.join(', ')}</div>`;
+                        html += `</div>`;
+                    });
+                    html += `</div>`;
+                } else {
+                    html += `<div class="content-box vector-box"><h4>🤖 Vector Search Results</h4><div class="error">No vector search results</div></div>`;
+                }
+                
+                // Keyword search results
+                if (data.keyword_search_results && data.keyword_search_results.length > 0) {
+                    html += `<div class="content-box es-box">`;
+                    html += `<h4>🔤 Keyword Search Results (${data.keyword_search_results.length})</h4>`;
+                    data.keyword_search_results.forEach((result, i) => {
+                        html += `<div style="margin-left: 20px; border-left: 3px solid #ffc107; padding-left: 10px; margin-bottom: 10px;">`;
+                        html += `<div><strong>${i+1}. ${result.product_title}</strong> (${result.confidence.toFixed(3)})</div>`;
+                        html += `<div>ID: ${result.product_id} | Price: $${result.price}</div>`;
+                        html += `<div>Reasons: ${result.reasons.join(', ')}</div>`;
+                        html += `</div>`;
+                    });
+                    html += `</div>`;
+                } else {
+                    html += `<div class="content-box es-box"><h4>🔤 Keyword Search Results</h4><div class="error">No keyword search results</div></div>`;
+                }
+            }
+            
+            // Raw data
+            html += `<details style="margin-top: 20px;"><summary>📋 Raw Vector Test Data</summary><pre>${JSON.stringify(data, null, 2)}</pre></details>`;
+            
+            div.innerHTML = html;
             results.appendChild(div);
         }
         
@@ -141,6 +231,32 @@
                 html += `<div>Providers: ${status.providers.join(', ')}</div>`;
                 html += `<div>Search Provider: ${status.has_search_provider ? '✅ ' + status.search_provider_type : '❌ None'}</div>`;
                 html += `<div>Config: ${status.config_search_provider}</div>`;
+                html += `<div>ES Version: ${status.es_version_support || 'Unknown'}</div>`;
+                html += `</div>`;
+            }
+            
+            // Vector Search Debug
+            if (data.vector_search_debug) {
+                const vector = data.vector_search_debug;
+                html += `<div class="content-box vector-box">`;
+                html += `<h4>🔬 Vector Search Debug</h4>`;
+                html += `<div>Embeddings Available: ${vector.embeddings_available ? '✅ Yes' : '❌ No'}</div>`;
+                
+                if (vector.embeddings_available) {
+                    html += `<div>Model: ${vector.embedding_model || 'Unknown'}</div>`;
+                    html += `<div>Embedding Dimension: ${vector.test_embedding_dimension}</div>`;
+                    html += `<div>Test Embedding: ${vector.test_embedding_success ? '✅ Success' : '❌ Failed'}</div>`;
+                    
+                    if (vector.sample_product_vectors) {
+                        const spv = vector.sample_product_vectors;
+                        html += `<div><strong>Sample Product Vectors:</strong></div>`;
+                        html += `<div style="margin-left: 20px;">Title Vector: ${spv.has_title_vector ? '✅' : '❌'}</div>`;
+                        html += `<div style="margin-left: 20px;">Description Vector: ${spv.has_description_vector ? '✅' : '❌'}</div>`;
+                        html += `<div style="margin-left: 20px;">Usage Scenarios Vectors: ${spv.has_usage_scenarios_vectors ? '✅ (' + spv.usage_scenarios_vector_count + ')' : '❌'}</div>`;
+                    }
+                } else {
+                    html += `<div class="error">Reason: ${vector.reason || vector.error || 'Unknown'}</div>`;
+                }
                 html += `</div>`;
             }
             
@@ -159,12 +275,6 @@
                         html += `<div style="margin-left: 20px;">${i+1}. ${variation.problem} (${variation.confidence})</div>`;
                     });
                 }
-                
-                if (intent.matching_products && intent.matching_products.length > 0) {
-                    html += `<div class="success">✅ Found ${intent.matching_products.length} matching products in scenarios</div>`;
-                } else {
-                    html += `<div class="error">❌ No matching products found in scenarios</div>`;
-                }
                 html += `</div>`;
             }
             
@@ -174,46 +284,46 @@
                 html += `<div class="content-box es-box">`;
                 html += `<h4>🔍 Elasticsearch Debug</h4>`;
                 html += `<div><strong>Index:</strong> ${es.index_name}</div>`;
+                html += `<div><strong>Total Fields:</strong> ${es.total_fields}</div>`;
+                html += `<div><strong>Vector Support:</strong> ${es.has_vector_support ? '✅ Yes' : '❌ No'}</div>`;
                 
-                if (es.expected_products_in_es && es.expected_products_in_es.length > 0) {
-                    html += `<div><strong>Expected Products in ES:</strong></div>`;
-                    es.expected_products_in_es.forEach(product => {
-                        if (product.found !== false) {
-                            html += `<div style="margin-left: 20px;" class="success">✅ ${product.id}: ${product.title}</div>`;
-                            html += `<div style="margin-left: 40px; font-size: 0.9em;">Scenarios: ${product.usage_scenarios}</div>`;
-                        } else {
-                            html += `<div style="margin-left: 20px;" class="error">❌ ${product.id}: Not found in ES</div>`;
-                        }
+                if (es.vector_fields_in_mapping && Object.keys(es.vector_fields_in_mapping).length > 0) {
+                    html += `<div><strong>Vector Fields:</strong></div>`;
+                    Object.entries(es.vector_fields_in_mapping).forEach(([field, config]) => {
+                        html += `<div style="margin-left: 20px;">${field}: ${config.dims}D (${config.similarity})</div>`;
                     });
-                }
-                
-                if (es.direct_search_results && es.direct_search_results.length > 0) {
-                    html += `<div class="success">✅ Direct ES search found ${es.direct_search_results.length} results</div>`;
-                } else {
-                    html += `<div class="error">❌ Direct ES search found no results</div>`;
                 }
                 html += `</div>`;
             }
             
-            // Final Search Results
+            // Search Results Comparison
             if (data.search_results) {
                 const results = data.search_results;
                 html += `<div class="content-box results-box">`;
-                html += `<h4>🎯 Final Search Results</h4>`;
+                html += `<h4>🎯 Search Results Comparison</h4>`;
                 
-                if (results.intent_results && results.intent_results.length > 0) {
-                    html += `<div class="success">✅ Intent Search: ${results.intent_results.length} results</div>`;
-                    results.intent_results.forEach((result, i) => {
-                        html += `<div style="margin-left: 20px;">${i+1}. ${result.product_title} (${result.confidence})</div>`;
+                // Vector Intent Results
+                if (results.vector_intent_results && results.vector_intent_results.length > 0) {
+                    html += `<div class="success">🤖 Vector Intent Search: ${results.vector_intent_results.length} results</div>`;
+                    results.vector_intent_results.forEach((result, i) => {
+                        html += `<div style="margin-left: 20px;">${i+1}. ${result.product_title} (${result.confidence.toFixed(3)})</div>`;
                     });
                 } else {
-                    html += `<div class="error">❌ Intent Search: 0 results</div>`;
+                    html += `<div class="error">🤖 Vector Intent Search: 0 results</div>`;
                 }
                 
-                if (results.keyword_results && results.keyword_results.length > 0) {
-                    html += `<div class="success">✅ Keyword Search: ${results.keyword_results.length} results</div>`;
+                // Original Intent Results
+                if (results.intent_results && results.intent_results.length > 0) {
+                    html += `<div class="success">🔤 Original Intent Search: ${results.intent_results.length} results</div>`;
                 } else {
-                    html += `<div class="error">❌ Keyword Search: 0 results</div>`;
+                    html += `<div class="error">🔤 Original Intent Search: 0 results</div>`;
+                }
+                
+                // Keyword Results
+                if (results.keyword_results && results.keyword_results.length > 0) {
+                    html += `<div class="success">📝 Keyword Search: ${results.keyword_results.length} results</div>`;
+                } else {
+                    html += `<div class="error">📝 Keyword Search: 0 results</div>`;
                 }
                 html += `</div>`;
             }

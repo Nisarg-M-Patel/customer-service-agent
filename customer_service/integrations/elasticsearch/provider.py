@@ -1,10 +1,14 @@
 # customer_service/integrations/elasticsearch/provider.py
-"""Elasticsearch provider for advanced product search with intent analysis."""
+"""Elasticsearch provider with vector embeddings support for ES 8.x"""
 
 import logging
 from typing import List, Dict, Optional
 from elasticsearch import Elasticsearch, helpers
 from datetime import datetime
+import asyncio
+from google import genai
+from google.genai.types import HttpOptions
+
 from ...database.models import StandardProduct, IntentResult, ProblemVariation, ProductMatch
 from ...config import Config
 from .config_generator import LLMConfigGenerator
@@ -12,13 +16,21 @@ from .config_generator import LLMConfigGenerator
 logger = logging.getLogger(__name__)
 
 class ElasticsearchProvider:
-    """Elasticsearch provider for enhanced product search capabilities with intent analysis."""
+    """Elasticsearch provider with vector embeddings for enhanced product search."""
     
     def __init__(self, config: Config):
         self.config = config
         
-        # Initialize Elasticsearch client
+        # Initialize Elasticsearch client for ES 8.x
         self.es = Elasticsearch([config.ELASTICSEARCH_URL])
+        
+        # Initialize Gemini client for embeddings
+        self.embedding_client = genai.Client(
+            vertexai=True,
+            project=config.CLOUD_PROJECT,
+            location=config.CLOUD_LOCATION,
+            http_options=HttpOptions(api_version="v1")
+        )
         
         # Load or generate search configuration
         config_generator = LLMConfigGenerator(config)
@@ -26,20 +38,20 @@ class ElasticsearchProvider:
         
         if not self.search_config:
             logger.info("No search config found, generating automatically...")
-            self.search_config = config_generator.generate_config()  # Auto-fetch products
+            self.search_config = config_generator.generate_config()
             
             if not self.search_config:
                 raise ValueError("Failed to generate search configuration")
         
         self.index_name = self.search_config["index_name"]
         
-        # Create index with configuration
-        self._create_index()
+        # Create index with vector field configuration
+        self._create_index_with_vectors()
         
-        logger.info(f"Initialized Elasticsearch provider for {self.search_config['business_type']}")
+        logger.info(f"Initialized Elasticsearch provider with vector support for {self.search_config['business_type']}")
 
-    def _create_index(self):
-        """Create Elasticsearch index with business-specific configuration including usage scenarios."""
+    def _create_index_with_vectors(self):
+        """Create Elasticsearch index with vector field configuration for ES 8.x."""
         
         if self.es.indices.exists(index=self.index_name):
             logger.info(f"Index {self.index_name} already exists")
@@ -73,7 +85,29 @@ class ElasticsearchProvider:
             }
         }
         
-        # Index configuration
+        # Add vector fields for semantic search
+        field_mappings["title_vector"] = {
+            "type": "dense_vector",
+            "dims": 768,  # text-embedding-001 produces 768-dim vectors
+            "index": True,
+            "similarity": "cosine"
+        }
+        
+        field_mappings["description_vector"] = {
+            "type": "dense_vector", 
+            "dims": 768,  # text-embedding-001 produces 768-dim vectors
+            "index": True,
+            "similarity": "cosine"
+        }
+        
+        field_mappings["usage_scenarios_vectors"] = {
+            "type": "dense_vector",
+            "dims": 768,  # text-embedding-001 produces 768-dim vectors
+            "index": True,
+            "similarity": "cosine"
+        }
+        
+        # Index configuration for ES 8.x
         index_config = {
             "settings": {
                 "number_of_shards": 1,
@@ -112,13 +146,114 @@ class ElasticsearchProvider:
         
         try:
             self.es.indices.create(index=self.index_name, body=index_config)
-            logger.info(f"Created Elasticsearch index: {self.index_name}")
+            logger.info(f"Created Elasticsearch index with vector support: {self.index_name}")
         except Exception as e:
             logger.error(f"Failed to create index: {e}")
             raise
-    
+
+    def _generate_embeddings(self, texts: List[str]) -> List[List[float]]:
+        """Generate embeddings for a list of texts using Gemini."""
+        if not texts:
+            return []
+        
+        try:
+            from google.genai.types import EmbedContentConfig
+            
+            embeddings = []
+            
+            for text in texts:
+                response = self.embedding_client.models.embed_content(
+                    model="gemini-embedding-001",  # Correct model name
+                    contents=text,  # Single text string
+                    config=EmbedContentConfig(
+                        task_type="SEMANTIC_SIMILARITY",  # For search/similarity tasks
+                        output_dimensionality=768  # Standard dimension for compatibility
+                    )
+                )
+                
+                # Extract embedding from response
+                if response.embeddings and len(response.embeddings) > 0:
+                    embeddings.append(response.embeddings[0].values)
+                else:
+                    logger.warning(f"No embedding returned for text: {text[:50]}...")
+                    return []
+            
+            logger.debug(f"Generated {len(embeddings)} embeddings with dimension {len(embeddings[0]) if embeddings else 0}")
+            return embeddings
+            
+        except Exception as e:
+            logger.error(f"Failed to generate embeddings: {e}")
+            return []
+
+    def _generate_product_embeddings(self, product: StandardProduct) -> Dict:
+        """Generate all embeddings for a product."""
+        embeddings = {}
+        
+        try:
+            # Prepare texts for embedding
+            texts_to_embed = []
+            field_names = []
+            
+            # Title
+            if product.title:
+                texts_to_embed.append(product.title)
+                field_names.append("title")
+            
+            # Description 
+            if product.description:
+                texts_to_embed.append(product.description)
+                field_names.append("description")
+            
+            # Individual usage scenarios
+            usage_scenario_texts = []
+            for scenario in product.usage_scenarios:
+                if scenario.strip():
+                    texts_to_embed.append(scenario)
+                    field_names.append("usage_scenario")
+                    usage_scenario_texts.append(scenario)
+            
+            # Generate embeddings for all texts at once
+            if texts_to_embed:
+                all_embeddings = self._generate_embeddings(texts_to_embed)
+                
+                if len(all_embeddings) == len(texts_to_embed):
+                    # Map embeddings back to fields
+                    title_idx = None
+                    description_idx = None
+                    usage_scenarios_vectors = []
+                    
+                    for i, field_name in enumerate(field_names):
+                        if field_name == "title" and title_idx is None:
+                            title_idx = i
+                        elif field_name == "description" and description_idx is None:
+                            description_idx = i
+                        elif field_name == "usage_scenario":
+                            usage_scenarios_vectors.append(all_embeddings[i])
+                    
+                    # Store embeddings
+                    if title_idx is not None:
+                        embeddings["title_vector"] = all_embeddings[title_idx]
+                    
+                    if description_idx is not None:
+                        embeddings["description_vector"] = all_embeddings[description_idx]
+                    
+                    if usage_scenarios_vectors:
+                        embeddings["usage_scenarios_vectors"] = usage_scenarios_vectors
+                    
+                    logger.debug(f"Generated embeddings for product {product.id}: title={title_idx is not None}, desc={description_idx is not None}, scenarios={len(usage_scenarios_vectors)}")
+                else:
+                    logger.warning(f"Embedding count mismatch for product {product.id}")
+            
+        except Exception as e:
+            logger.error(f"Failed to generate embeddings for product {product.id}: {e}")
+        
+        return embeddings
+
     def index_product(self, product: StandardProduct):
-        """Index a single product in Elasticsearch."""
+        """Index a single product with embeddings in Elasticsearch."""
+        
+        # Generate embeddings
+        embeddings = self._generate_product_embeddings(product)
         
         doc = {
             "product_id": product.id,
@@ -131,7 +266,8 @@ class ElasticsearchProvider:
             "inventory_quantity": product.inventory_quantity,
             "availability": product.availability,
             "created_at": product.created_at,
-            "updated_at": product.updated_at
+            "updated_at": product.updated_at,
+            **embeddings  # Add all generated embeddings
         }
         
         try:
@@ -140,15 +276,18 @@ class ElasticsearchProvider:
                 id=product.id,
                 body=doc
             )
-            logger.debug(f"Indexed product: {product.id}")
+            logger.debug(f"Indexed product with embeddings: {product.id}")
         except Exception as e:
             logger.error(f"Failed to index product {product.id}: {e}")
-    
+
     def bulk_index_products(self, products: List[StandardProduct]):
-        """Bulk index multiple products."""
+        """Bulk index multiple products with embeddings."""
         
         def generate_docs():
             for product in products:
+                # Generate embeddings for this product
+                embeddings = self._generate_product_embeddings(product)
+                
                 yield {
                     "_index": self.index_name,
                     "_id": product.id,
@@ -163,27 +302,29 @@ class ElasticsearchProvider:
                         "inventory_quantity": product.inventory_quantity,
                         "availability": product.availability,
                         "created_at": product.created_at,
-                        "updated_at": product.updated_at
+                        "updated_at": product.updated_at,
+                        **embeddings  # Add all generated embeddings
                     }
                 }
         
         try:
             success_count, failed = helpers.bulk(self.es, generate_docs())
-            logger.info(f"Bulk indexed {success_count} products, {len(failed)} failed")
+            logger.info(f"Bulk indexed {success_count} products with embeddings, {len(failed)} failed")
             return success_count
         except Exception as e:
-            logger.error(f"Bulk indexing failed: {e}")
+            logger.error(f"Bulk indexing with embeddings failed: {e}")
             return 0
-    
+
+    # Keep existing methods but add vector search capabilities
     def search_products(self, query: str = None, category: str = None, 
                        price_min: float = None, price_max: float = None,
                        in_stock_only: bool = False, **filters) -> List[StandardProduct]:
-        """Search products using generated configuration (keyword search)."""
+        """Search products using keyword search (unchanged for compatibility)."""
         
         searchable_fields = self.search_config.get("searchable_fields", {})
         search_settings = self.search_config.get("search_settings", {})
         
-        # Build search query
+        # Build search query (existing logic)
         search_body = {
             "query": {
                 "bool": {
@@ -200,7 +341,6 @@ class ElasticsearchProvider:
         
         # Add text search if query provided
         if query:
-            # Build multi-match query with field weights from config
             fields_with_weights = []
             for field_name, field_config in searchable_fields.items():
                 weight = field_config.get("weight", 1.0)
@@ -216,7 +356,7 @@ class ElasticsearchProvider:
                 }
             })
         
-        # Add filters
+        # Add filters (existing logic)
         if category:
             search_body["query"]["bool"]["filter"].append({
                 "match": {"categories": category}
@@ -272,116 +412,8 @@ class ElasticsearchProvider:
         except Exception as e:
             logger.error(f"Search failed: {e}")
             return []
-    
-    def search_by_intent(self, query: str, **kwargs) -> List[ProductMatch]:
-        """Search products using intent analysis and problem matching."""
-        
-        try:
-            # Initialize config generator for intent analysis
-            config_generator = LLMConfigGenerator(self.config)
-            
-            # Step 1: Analyze user intent
-            intent = config_generator.analyze_intent(query)
-            logger.info(f"Analyzed intent: {intent.primary_problem}")
-            
-            # Step 2: Expand to related problems
-            problem_variations = config_generator.expand_problems(intent)
-            logger.info(f"Expanded to {len(problem_variations)} problem variations")
-            
-            # Step 3: Search for products that solve these problems
-            all_matches = []
-            
-            for problem_var in problem_variations:
-                # Search for products with matching usage scenarios
-                search_body = {
-                    "query": {
-                        "bool": {
-                            "should": [
-                                # Exact match on usage scenarios
-                                {
-                                    "term": {
-                                        "usage_scenarios.keyword": problem_var.problem
-                                    }
-                                },
-                                # Fuzzy match on usage scenarios
-                                {
-                                    "match": {
-                                        "usage_scenarios": {
-                                            "query": problem_var.problem,
-                                            "fuzziness": "AUTO"
-                                        }
-                                    }
-                                }
-                            ],
-                            "filter": []
-                        }
-                    },
-                    "size": 10,
-                    "_source": ["product_id", "title", "price", "usage_scenarios", "availability"]
-                }
-                
-                # Add availability filter if requested
-                if kwargs.get("in_stock_only", False):
-                    search_body["query"]["bool"]["filter"].append({
-                        "range": {"inventory_quantity": {"gt": 0}}
-                    })
-                
-                try:
-                    response = self.es.search(index=self.index_name, body=search_body)
-                    
-                    for hit in response["hits"]["hits"]:
-                        source = hit["_source"]
-                        
-                        # Calculate confidence score
-                        base_confidence = problem_var.confidence
-                        relevance_score = hit["_score"] / 10.0  # Normalize ES score
-                        final_confidence = min(base_confidence * relevance_score, 1.0)
-                        
-                        match = ProductMatch(
-                            product_id=source["product_id"],
-                            product_title=source["title"],
-                            confidence=final_confidence,
-                            reasons=[f"Solves {problem_var.problem}"],
-                            price=source.get("price", 0.0)
-                        )
-                        
-                        all_matches.append(match)
-                        
-                except Exception as e:
-                    logger.error(f"Search failed for problem {problem_var.problem}: {e}")
-                    continue
-            
-            # Step 4: Aggregate and rank results
-            return self._aggregate_matches(all_matches)
-            
-        except Exception as e:
-            logger.error(f"Intent search failed: {e}")
-            return []
 
-    def _aggregate_matches(self, matches: List[ProductMatch]) -> List[ProductMatch]:
-        """Aggregate multiple matches for same product and rank by confidence."""
-        
-        # Group matches by product_id
-        product_matches = {}
-        
-        for match in matches:
-            if match.product_id in product_matches:
-                # Combine confidence scores and reasons
-                existing = product_matches[match.product_id]
-                existing.confidence = max(existing.confidence, match.confidence)
-                existing.reasons.extend(match.reasons)
-            else:
-                product_matches[match.product_id] = match
-        
-        # Sort by confidence score (highest first)
-        ranked_matches = sorted(
-            product_matches.values(), 
-            key=lambda x: x.confidence, 
-            reverse=True
-        )
-        
-        return ranked_matches[:10]  # Return top 10
-    
+    # Continue with rest of the existing methods...
     def get_product_by_id(self, product_id: str) -> Optional[StandardProduct]:
         """Get specific product by ID from Elasticsearch."""
         try:
@@ -406,7 +438,7 @@ class ElasticsearchProvider:
         except Exception as e:
             logger.error(f"Failed to get product {product_id}: {e}")
             return None
-    
+
     def check_inventory(self, product_id: str) -> Dict:
         """Check product inventory in Elasticsearch."""
         product = self.get_product_by_id(product_id)
@@ -418,146 +450,235 @@ class ElasticsearchProvider:
             "quantity": product.inventory_quantity,
             "product_name": product.title
         }
-    
-    def get_search_suggestions(self, query: str, size: int = 5) -> List[str]:
-        """Get search suggestions/autocomplete."""
+
+    def search_by_intent_with_vectors(self, query: str, **kwargs) -> List[ProductMatch]:
+        """Search products using vector embeddings + intent analysis (hybrid approach)."""
+        
         try:
-            # Simple completion based on product titles
+            # Step 1: Analyze user intent (keep existing logic)
+            config_generator = LLMConfigGenerator(self.config)
+            intent = config_generator.analyze_intent(query)
+            problem_variations = config_generator.expand_problems(intent)
+            
+            logger.info(f"Intent analysis: {intent.primary_problem}, {len(problem_variations)} variations")
+            
+            # Step 2: Generate embeddings for problem variations
+            problem_texts = [var.problem for var in problem_variations]
+            problem_embeddings = self._generate_embeddings(problem_texts)
+            
+            if not problem_embeddings:
+                logger.warning("Could not generate embeddings, falling back to keyword search")
+                return self._fallback_keyword_intent_search(query, problem_variations, **kwargs)
+            
+            # Step 3: Build hybrid search query (vector + keyword)
             search_body = {
-                "suggest": {
-                    "title_suggest": {
-                        "text": query,
-                        "term": {
-                            "field": "title",
-                            "size": size
-                        }
+                "query": {
+                    "bool": {
+                        "should": [],
+                        "filter": []
                     }
-                }
+                },
+                "size": 50,  # Get more results for ranking
+                "_source": ["product_id", "title", "price", "usage_scenarios", "availability"]
             }
             
-            response = self.es.search(index=self.index_name, body=search_body)
-            suggestions = []
+            # Add availability filter if requested
+            if kwargs.get("in_stock_only", False):
+                search_body["query"]["bool"]["filter"].append({
+                    "range": {"inventory_quantity": {"gt": 0}}
+                })
             
-            for suggestion in response.get("suggest", {}).get("title_suggest", []):
-                for option in suggestion.get("options", []):
-                    suggestions.append(option["text"])
+            # Step 4: Add vector similarity queries for each problem variation
+            for i, (problem_var, embedding) in enumerate(zip(problem_variations, problem_embeddings)):
+                confidence_boost = problem_var.confidence
+                
+                # Vector search against usage scenarios
+                search_body["query"]["bool"]["should"].append({
+                    "script_score": {
+                        "query": {"exists": {"field": "usage_scenarios_vectors"}},
+                        "script": {
+                            "source": """
+                                double maxScore = 0.0;
+                                for (int i = 0; i < doc['usage_scenarios_vectors'].size(); i++) {
+                                    double score = cosineSimilarity(params.query_vector, doc['usage_scenarios_vectors'][i]);
+                                    maxScore = Math.max(maxScore, score);
+                                }
+                                return maxScore * params.confidence_boost;
+                            """,
+                            "params": {
+                                "query_vector": embedding,
+                                "confidence_boost": confidence_boost * 3.0  # High weight for usage scenarios
+                            }
+                        }
+                    }
+                })
+                
+                # Vector search against descriptions (lower weight)
+                search_body["query"]["bool"]["should"].append({
+                    "script_score": {
+                        "query": {"exists": {"field": "description_vector"}},
+                        "script": {
+                            "source": "cosineSimilarity(params.query_vector, 'description_vector') * params.confidence_boost",
+                            "params": {
+                                "query_vector": embedding,
+                                "confidence_boost": confidence_boost * 1.5  # Medium weight
+                            }
+                        }
+                    }
+                })
+                
+                # Vector search against titles (lowest weight)
+                search_body["query"]["bool"]["should"].append({
+                    "script_score": {
+                        "query": {"exists": {"field": "title_vector"}},
+                        "script": {
+                            "source": "cosineSimilarity(params.query_vector, 'title_vector') * params.confidence_boost",
+                            "params": {
+                                "query_vector": embedding,
+                                "confidence_boost": confidence_boost * 1.0  # Low weight
+                            }
+                        }
+                    }
+                })
+                
+                # Add keyword fallback for this problem variation
+                search_body["query"]["bool"]["should"].append({
+                    "multi_match": {
+                        "query": problem_var.problem,
+                        "fields": ["usage_scenarios^2.0", "title^1.0", "description^0.5"],
+                        "boost": confidence_boost * 0.8  # Lower than vector search
+                    }
+                })
             
-            return suggestions[:size]
-            
+            # Step 5: Execute search
+            try:
+                response = self.es.search(index=self.index_name, body=search_body)
+                
+                # Step 6: Process results and create ProductMatch objects
+                product_matches = []
+                for hit in response["hits"]["hits"]:
+                    source = hit["_source"]
+                    score = hit["_score"]
+                    
+                    # Normalize score to confidence (0-1 range)
+                    confidence = min(score / 10.0, 1.0)  # Adjust divisor based on your score ranges
+                    
+                    match = ProductMatch(
+                        product_id=source["product_id"],
+                        product_title=source["title"],
+                        confidence=confidence,
+                        reasons=["semantic_match", "intent_analysis"],
+                        price=source.get("price", 0.0)
+                    )
+                    
+                    product_matches.append(match)
+                
+                # Step 7: Sort by confidence and return top results
+                ranked_matches = sorted(product_matches, key=lambda x: x.confidence, reverse=True)
+                logger.info(f"Vector search returned {len(ranked_matches)} matches")
+                return ranked_matches[:10]
+                
+            except Exception as e:
+                logger.error(f"Vector search query failed: {e}")
+                return self._fallback_keyword_intent_search(query, problem_variations, **kwargs)
+                
         except Exception as e:
-            logger.error(f"Failed to get suggestions: {e}")
+            logger.error(f"Intent vector search failed: {e}")
             return []
-    
+
+    def _fallback_keyword_intent_search(self, query: str, problem_variations: List[ProblemVariation], **kwargs) -> List[ProductMatch]:
+        """Fallback to keyword-based intent search if vector search fails."""
+        logger.info("Using keyword fallback for intent search")
+        
+        all_matches = []
+        
+        for problem_var in problem_variations:
+            # Search for products with matching usage scenarios (keyword)
+            search_body = {
+                "query": {
+                    "bool": {
+                        "should": [
+                            {"term": {"usage_scenarios.keyword": problem_var.problem}},
+                            {"match": {"usage_scenarios": {"query": problem_var.problem, "fuzziness": "AUTO"}}}
+                        ],
+                        "filter": []
+                    }
+                },
+                "size": 10,
+                "_source": ["product_id", "title", "price", "usage_scenarios", "availability"]
+            }
+            
+            if kwargs.get("in_stock_only", False):
+                search_body["query"]["bool"]["filter"].append({
+                    "range": {"inventory_quantity": {"gt": 0}}
+                })
+            
+            try:
+                response = self.es.search(index=self.index_name, body=search_body)
+                
+                for hit in response["hits"]["hits"]:
+                    source = hit["_source"]
+                    
+                    confidence = problem_var.confidence * (hit["_score"] / 10.0)
+                    
+                    match = ProductMatch(
+                        product_id=source["product_id"],
+                        product_title=source["title"],
+                        confidence=min(confidence, 1.0),
+                        reasons=[f"keyword_match: {problem_var.problem}"],
+                        price=source.get("price", 0.0)
+                    )
+                    
+                    all_matches.append(match)
+                    
+            except Exception as e:
+                logger.error(f"Keyword search failed for problem {problem_var.problem}: {e}")
+                continue
+        
+        # Return top matches
+        ranked_matches = sorted(all_matches, key=lambda x: x.confidence, reverse=True)
+        return ranked_matches[:10]
+
+    # Update the existing search_by_intent method to use vectors
+    def search_by_intent(self, query: str, **kwargs) -> List[ProductMatch]:
+        """Search products using intent analysis with vector embeddings (primary method)."""
+        return self.search_by_intent_with_vectors(query, **kwargs)
+
     def sync_from_provider(self, source_provider):
-        """Sync products from another provider (like Shopify) to Elasticsearch."""
-        logger.info("Starting product sync to Elasticsearch...")
+        """Sync products from another provider to Elasticsearch with embeddings."""
+        logger.info("Starting product sync to Elasticsearch with embeddings...")
         
         try:
             # Get all products from source provider
-            products = source_provider.search_products()  # Get all products
+            products = source_provider.search_products()
             
             if products:
-                # Generate usage scenarios for all products before indexing
-                logger.info("Generating usage scenarios for products...")
+                # Generate usage scenarios if needed
+                logger.info("Checking usage scenarios...")
                 config_generator = LLMConfigGenerator(self.config)
-                usage_scenarios_map = config_generator.generate_usage_scenarios(products)
+                usage_scenarios_map = config_generator.load_usage_scenarios()
                 
-                # Save scenarios to file for persistence
-                if usage_scenarios_map:
-                    config_generator._save_usage_scenarios(usage_scenarios_map)
-                    logger.info(f"Saved usage scenarios to file for {len(usage_scenarios_map)} products")
+                if not usage_scenarios_map:
+                    logger.info("Generating usage scenarios for products...")
+                    usage_scenarios_map = config_generator.generate_usage_scenarios(products)
+                    if usage_scenarios_map:
+                        config_generator._save_usage_scenarios(usage_scenarios_map)
                 
                 # Update products with usage scenarios
                 for product in products:
-                    if product.id in usage_scenarios_map:
+                    if usage_scenarios_map and product.id in usage_scenarios_map:
                         product.usage_scenarios = usage_scenarios_map[product.id]
                     else:
                         product.usage_scenarios = ["general_gardening"]
                 
-                # Index products with usage scenarios
+                # Index products with embeddings
                 indexed_count = self.bulk_index_products(products)
-                logger.info(f"Synced {indexed_count} products to Elasticsearch with usage scenarios")
+                logger.info(f"Synced {indexed_count} products to Elasticsearch with embeddings")
                 return indexed_count
             else:
                 logger.warning("No products found to sync")
                 return 0
                 
         except Exception as e:
-            logger.error(f"Sync failed: {e}")
+            logger.error(f"Sync with embeddings failed: {e}")
             return 0
-        
-    def update_product_usage_scenarios(self, product_id: str, usage_scenarios: List[str]):
-        """Update usage scenarios for a specific product."""
-        
-        try:
-            self.es.update(
-                index=self.index_name,
-                id=product_id,
-                body={
-                    "doc": {
-                        "usage_scenarios": " ".join(usage_scenarios)
-                    }
-                }
-            )
-            logger.info(f"Updated usage scenarios for product {product_id}")
-            
-        except Exception as e:
-            logger.error(f"Failed to update usage scenarios for {product_id}: {e}")
-
-    def bulk_update_usage_scenarios(self, usage_scenarios_map: Dict[str, List[str]]):
-
-        """Bulk update usage scenarios for multiple products."""
-        
-        def generate_updates():
-            for product_id, scenarios in usage_scenarios_map.items():
-                yield {
-                    "_op_type": "update",
-                    "_index": self.index_name,
-                    "_id": product_id,
-                    "doc": {
-                        "usage_scenarios": " ".join(scenarios)
-                    }
-                }
-        
-        try:
-            success_count, failed = helpers.bulk(self.es, generate_updates())
-            logger.info(f"Bulk updated usage scenarios: {success_count} success, {len(failed)} failed")
-            return success_count
-            
-        except Exception as e:
-            logger.error(f"Bulk usage scenario update failed: {e}")
-            return 0
-    
-    
-    def _ensure_usage_scenarios_exist(self):
-        """Ensure usage scenarios exist, generate them if they don't."""
-        try:
-            config_generator = LLMConfigGenerator(self.config)
-            
-            if not config_generator.usage_scenarios_exist():
-                logger.info("Usage scenarios don't exist, generating automatically...")
-                
-                # Get products from the primary provider
-                from ..manager import IntegrationManager
-                integration_manager = IntegrationManager(self.config)
-                primary_provider = integration_manager._get_primary_provider()
-                
-                # Get all products
-                products = primary_provider.search_products()
-                
-                if products:
-                    # Generate usage scenarios
-                    usage_scenarios_map = config_generator.generate_usage_scenarios(products)
-                    
-                    if usage_scenarios_map:
-                        # Update existing products in Elasticsearch with usage scenarios
-                        self.bulk_update_usage_scenarios(usage_scenarios_map)
-                        logger.info(f"Auto-generated usage scenarios for {len(usage_scenarios_map)} products")
-                    else:
-                        logger.warning("Failed to generate usage scenarios")
-                else:
-                    logger.warning("No products found to generate usage scenarios")
-                    
-        except Exception as e:
-            logger.error(f"Auto usage scenario generation failed: {e}")
-            # Don't fail initialization, just log the error
