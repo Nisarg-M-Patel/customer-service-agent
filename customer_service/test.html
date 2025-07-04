@@ -3,50 +3,85 @@
 <head>
     <title>Customer Service API Test</title>
     <style>
-        body { font-family: Arial, sans-serif; max-width: 1000px; margin: 50px auto; }
-        button { padding: 10px 20px; margin: 10px; }
-        input { padding: 10px; margin: 10px; width: 400px; }
-        pre { background: #f5f5f5; padding: 10px; border-radius: 5px; }
-        .status { padding: 10px; margin: 10px 0; border-radius: 5px; }
-        .ready { background: #d4edda; }
-        .not-ready { background: #f8d7da; }
-        .section { border: 2px solid #007bff; padding: 15px; margin: 20px 0; border-radius: 5px; }
-        .debug-section { border-color: #17a2b8; }
-        .vector-section { border-color: #6f42c1; }
-        .results-section { border-color: #28a745; }
-        .error { color: #dc3545; font-weight: bold; }
+        body { 
+            font-family: Arial, sans-serif; 
+            max-width: 800px; 
+            margin: 50px auto; 
+            padding: 20px;
+        }
+        button { 
+            padding: 10px 20px; 
+            margin: 10px; 
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        button:hover { background: #0056b3; }
+        pre { 
+            background: #f5f5f5; 
+            padding: 15px; 
+            border-radius: 5px; 
+            border-left: 4px solid #007bff;
+            overflow-x: auto;
+        }
+        .section { 
+            border: 2px solid #007bff; 
+            padding: 20px; 
+            margin: 20px 0; 
+            border-radius: 8px; 
+        }
         .success { color: #28a745; font-weight: bold; }
-        .warning { color: #ffc107; font-weight: bold; }
-        .expandable { cursor: pointer; background: #e9ecef; padding: 5px; margin: 5px 0; border-radius: 3px; }
-        .content-box { border-left: 3px solid #007bff; padding-left: 10px; margin: 10px 0; }
-        .intent-box { border-left-color: #28a745; }
-        .es-box { border-left-color: #ffc107; }
-        .vector-box { border-left-color: #6f42c1; }
-        .results-box { border-left-color: #dc3545; }
+        .error { color: #dc3545; font-weight: bold; }
+        .loading { color: #ffc107; font-weight: bold; }
     </style>
 </head>
 <body>
-    <h1>Customer Service API Comprehensive Test</h1>
+    <h1>Customer Service API Test</h1>
     
     <div class="section">
-        <h3>🏥 Basic Health Checks</h3>
-        <button onclick="checkHealth()">Check Health</button>
-        <button onclick="checkReady()">Check Ready</button>
-        <button onclick="forceInit()">Force Initialize</button>
+        <h3>Health Check</h3>
+        <p>Check if the API server is running</p>
+        <button onclick="healthCheck()">Health Check</button>
     </div>
     
-    <div class="section debug-section">
-        <h3>🔍 Comprehensive Debug</h3>
-        <p>This will test the entire search pipeline: Intent Analysis → Elasticsearch → Final Results</p>
-        <input type="text" id="comprehensiveQuery" placeholder="Enter search query..." value="My plants are sitting in water and won't drain">
-        <button onclick="comprehensiveDebug()">🚀 Full Pipeline Debug</button>
+    <div class="section">
+        <h3>Sync Products</h3>
+        <p>Sync products from your provider (Shopify/Mock) to Elasticsearch</p>
+        <button onclick="syncProducts()">Sync Products</button>
     </div>
     
-    <div class="section vector-section">
-        <h3>🔬 Vector Search Testing</h3>
-        <p>Test the new vector-based semantic search functionality</p>
-        <input type="text" id="vectorQuery" placeholder="Enter search query..." value="my plants have yellow leaves and are dying">
-        <button onclick="testVectorSearch()">🚀 Test Vector Search</button>
+    <div class="section">
+        <h3>Generate Scenarios</h3>
+        <p>Generate usage scenarios for products using LLM</p>
+        <button onclick="generateScenarios()">Generate Scenarios</button>
+    </div>
+    
+    <div class="section">
+        <h3>Generate Embeddings</h3>
+        <p>Generate vector embeddings for products using OpenAI</p>
+        <button onclick="generateEmbeddings()">Generate Embeddings</button>
+    </div>
+    
+    <div class="section">
+        <h3>Debug Embeddings</h3>
+        <p>Check if products and scenarios have embeddings stored</p>
+        <button onclick="debugEmbeddings()">Debug Embeddings</button>
+    </div>
+    
+    <div class="section">
+        <h3>Search Intent</h3>
+        <p>Test vector search with user queries</p>
+        <input type="text" id="searchQuery" placeholder="Enter search query..." value="my plants are dying and turning yellow">
+        <button onclick="searchIntent()">Search Intent</button>
+    </div>
+    
+    <div class="section">
+        <h3>Debug Intent</h3>
+        <p>Debug what intent analysis produces for a query</p>
+        <input type="text" id="debugQuery" placeholder="Enter search query..." value="I want a nice tree in my garden">
+        <button onclick="debugIntent()">Debug Intent</button>
     </div>
     
     <div id="results"></div>
@@ -54,289 +89,209 @@
     <script>
         const API_BASE = 'http://localhost:8001';
         
-        async function checkHealth() {
-            try {
-                const response = await fetch(`${API_BASE}/api/health`);
-                const data = await response.json();
-                showSimpleResult('Health Check', data, response.ok);
-            } catch (error) {
-                showSimpleResult('Health Check', {error: error.message}, false);
-            }
-        }
-        
-        async function checkReady() {
-            try {
-                const response = await fetch(`${API_BASE}/api/ready`);
-                const data = await response.json();
-                showSimpleResult('Ready Check', data, response.ok);
-                
-                const statusDiv = document.createElement('div');
-                statusDiv.className = `status ${data.ready ? 'ready' : 'not-ready'}`;
-                statusDiv.innerHTML = data.ready ? 
-                    `✅ Agent Ready! Found ${data.product_count} products` : 
-                    `❌ Agent Not Ready: ${data.reason}`;
-                document.getElementById('results').appendChild(statusDiv);
-                
-            } catch (error) {
-                showSimpleResult('Ready Check', {error: error.message}, false);
-            }
-        }
-        
-        async function forceInit() {
-            try {
-                showSimpleResult('Initializing...', {message: 'Starting initialization...'}, true);
-                
-                const response = await fetch(`${API_BASE}/api/initialize`, {
-                    method: 'POST'
-                });
-                const data = await response.json();
-                showSimpleResult('Force Initialize', data, response.ok);
-                
-            } catch (error) {
-                showSimpleResult('Force Initialize', {error: error.message}, false);
-            }
-        }
-        
-        async function comprehensiveDebug() {
-            const query = document.getElementById('comprehensiveQuery').value.trim();
-            if (!query) {
-                alert('Please enter a search query');
-                return;
-            }
-            
-            try {
-                showSimpleResult('🚀 Comprehensive Debug', {message: `Running full pipeline for: "${query}"`}, true);
-                
-                const response = await fetch(`${API_BASE}/api/debug-comprehensive/${encodeURIComponent(query)}`);
-                const data = await response.json();
-                
-                showComprehensiveResult('Comprehensive Debug Results', data, response.ok);
-                
-            } catch (error) {
-                showSimpleResult('Comprehensive Debug', {error: error.message}, false);
-            }
-        }
-        
-        async function testVectorSearch() {
-            const query = document.getElementById('vectorQuery').value.trim();
-            if (!query) {
-                alert('Please enter a search query');
-                return;
-            }
-            
-            try {
-                showSimpleResult('🔬 Vector Search Test', {message: `Testing vector search for: "${query}"`}, true);
-                
-                const response = await fetch(`${API_BASE}/api/test-vector-search/${encodeURIComponent(query)}`);
-                const data = await response.json();
-                
-                showVectorSearchResult('Vector Search Test Results', data, response.ok);
-                
-            } catch (error) {
-                showSimpleResult('Vector Search Test', {error: error.message}, false);
-            }
-        }
-        
-        function showSimpleResult(title, data, success) {
+        function showResult(title, data, success) {
             const results = document.getElementById('results');
             const div = document.createElement('div');
+            const statusClass = success ? 'success' : 'error';
+            const statusIcon = success ? 'SUCCESS' : 'ERROR';
+            
             div.innerHTML = `
-                <h3>${title} ${success ? '✅' : '❌'}</h3>
-                <pre>${JSON.stringify(data, null, 2)}</pre>
+                <div class="section">
+                    <h3>${statusIcon}: ${title}</h3>
+                    <div class="${statusClass}">Status: ${data.status || 'Unknown'}</div>
+                    <pre>${JSON.stringify(data, null, 2)}</pre>
+                </div>
             `;
             results.appendChild(div);
         }
         
-        function showVectorSearchResult(title, data, success) {
+        function showLoading(title) {
             const results = document.getElementById('results');
             const div = document.createElement('div');
-            div.className = 'results-section section';
-            
-            let html = `<h2>${title} ${success ? '✅' : '❌'}</h2>`;
-            
-            if (data.error) {
-                html += `<div class="error">❌ Error: ${data.error}</div>`;
-            } else {
-                // Comparison summary
-                if (data.comparison) {
-                    const comp = data.comparison;
-                    html += `<div class="content-box">`;
-                    html += `<h4>📊 Search Comparison</h4>`;
-                    html += `<div>Vector Search: ${comp.vector_count} results</div>`;
-                    html += `<div>Keyword Search: ${comp.keyword_count} results</div>`;
-                    html += `<div class="${comp.vector_better ? 'success' : 'warning'}">Vector search ${comp.vector_better ? 'performed better' : 'performed similarly'}</div>`;
-                    html += `</div>`;
-                }
-                
-                // Vector search results
-                if (data.vector_search_results && data.vector_search_results.length > 0) {
-                    html += `<div class="content-box vector-box">`;
-                    html += `<h4>🤖 Vector Search Results (${data.vector_search_results.length})</h4>`;
-                    data.vector_search_results.forEach((result, i) => {
-                        html += `<div style="margin-left: 20px; border-left: 3px solid #6f42c1; padding-left: 10px; margin-bottom: 10px;">`;
-                        html += `<div><strong>${i+1}. ${result.product_title}</strong> (${result.confidence.toFixed(3)})</div>`;
-                        html += `<div>ID: ${result.product_id} | Price: $${result.price}</div>`;
-                        html += `<div>Reasons: ${result.reasons.join(', ')}</div>`;
-                        html += `</div>`;
-                    });
-                    html += `</div>`;
-                } else {
-                    html += `<div class="content-box vector-box"><h4>🤖 Vector Search Results</h4><div class="error">No vector search results</div></div>`;
-                }
-                
-                // Keyword search results
-                if (data.keyword_search_results && data.keyword_search_results.length > 0) {
-                    html += `<div class="content-box es-box">`;
-                    html += `<h4>🔤 Keyword Search Results (${data.keyword_search_results.length})</h4>`;
-                    data.keyword_search_results.forEach((result, i) => {
-                        html += `<div style="margin-left: 20px; border-left: 3px solid #ffc107; padding-left: 10px; margin-bottom: 10px;">`;
-                        html += `<div><strong>${i+1}. ${result.product_title}</strong> (${result.confidence.toFixed(3)})</div>`;
-                        html += `<div>ID: ${result.product_id} | Price: $${result.price}</div>`;
-                        html += `<div>Reasons: ${result.reasons.join(', ')}</div>`;
-                        html += `</div>`;
-                    });
-                    html += `</div>`;
-                } else {
-                    html += `<div class="content-box es-box"><h4>🔤 Keyword Search Results</h4><div class="error">No keyword search results</div></div>`;
-                }
-            }
-            
-            // Raw data
-            html += `<details style="margin-top: 20px;"><summary>📋 Raw Vector Test Data</summary><pre>${JSON.stringify(data, null, 2)}</pre></details>`;
-            
-            div.innerHTML = html;
+            div.id = 'loading';
+            div.innerHTML = `
+                <div class="section">
+                    <h3>LOADING: ${title}</h3>
+                    <div class="loading">Processing...</div>
+                </div>
+            `;
             results.appendChild(div);
         }
         
-        function showComprehensiveResult(title, data, success) {
-            const results = document.getElementById('results');
-            const div = document.createElement('div');
-            div.className = 'results-section section';
+        function clearLoading() {
+            const loading = document.getElementById('loading');
+            if (loading) loading.remove();
+        }
+        
+        async function healthCheck() {
+            showLoading('Health Check');
             
-            let html = `<h2>${title} ${success ? '✅' : '❌'}</h2>`;
-            
-            // Show errors first if any
-            if (data.errors && data.errors.length > 0) {
-                html += `<div class="error">⚠️ Errors Found:</div>`;
-                data.errors.forEach(error => {
-                    html += `<div class="error">• ${error}</div>`;
-                });
-            }
-            
-            // Integration Status
-            if (data.integration_status) {
-                const status = data.integration_status;
-                html += `<div class="content-box">`;
-                html += `<h4>🔧 Integration Status</h4>`;
-                html += `<div>Providers: ${status.providers.join(', ')}</div>`;
-                html += `<div>Search Provider: ${status.has_search_provider ? '✅ ' + status.search_provider_type : '❌ None'}</div>`;
-                html += `<div>Config: ${status.config_search_provider}</div>`;
-                html += `<div>ES Version: ${status.es_version_support || 'Unknown'}</div>`;
-                html += `</div>`;
-            }
-            
-            // Vector Search Debug
-            if (data.vector_search_debug) {
-                const vector = data.vector_search_debug;
-                html += `<div class="content-box vector-box">`;
-                html += `<h4>🔬 Vector Search Debug</h4>`;
-                html += `<div>Embeddings Available: ${vector.embeddings_available ? '✅ Yes' : '❌ No'}</div>`;
+            try {
+                const response = await fetch(`${API_BASE}/api/health`);
+                const data = await response.json();
+                clearLoading();
+                showResult('Health Check', data, response.ok && data.status === 'healthy');
                 
-                if (vector.embeddings_available) {
-                    html += `<div>Model: ${vector.embedding_model || 'Unknown'}</div>`;
-                    html += `<div>Embedding Dimension: ${vector.test_embedding_dimension}</div>`;
-                    html += `<div>Test Embedding: ${vector.test_embedding_success ? '✅ Success' : '❌ Failed'}</div>`;
-                    
-                    if (vector.sample_product_vectors) {
-                        const spv = vector.sample_product_vectors;
-                        html += `<div><strong>Sample Product Vectors:</strong></div>`;
-                        html += `<div style="margin-left: 20px;">Title Vector: ${spv.has_title_vector ? '✅' : '❌'}</div>`;
-                        html += `<div style="margin-left: 20px;">Description Vector: ${spv.has_description_vector ? '✅' : '❌'}</div>`;
-                        html += `<div style="margin-left: 20px;">Usage Scenarios Vectors: ${spv.has_usage_scenarios_vectors ? '✅ (' + spv.usage_scenarios_vector_count + ')' : '❌'}</div>`;
+            } catch (error) {
+                clearLoading();
+                showResult('Health Check', {
+                    status: 'error',
+                    message: error.message
+                }, false);
+            }
+        }
+        
+        async function syncProducts() {
+            showLoading('Syncing Products');
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/sync-products`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
                     }
-                } else {
-                    html += `<div class="error">Reason: ${vector.reason || vector.error || 'Unknown'}</div>`;
-                }
-                html += `</div>`;
+                });
+                
+                const data = await response.json();
+                clearLoading();
+                showResult('Sync Products', data, response.ok && data.status === 'success');
+                
+            } catch (error) {
+                clearLoading();
+                showResult('Sync Products', {
+                    status: 'error',
+                    message: error.message
+                }, false);
             }
-            
-            // Intent Analysis
-            if (data.intent_analysis && data.intent_analysis.detected_intent) {
-                const intent = data.intent_analysis;
-                html += `<div class="content-box intent-box">`;
-                html += `<h4>🧠 Intent Analysis</h4>`;
-                html += `<div><strong>Primary Problem:</strong> ${intent.detected_intent.primary_problem}</div>`;
-                html += `<div><strong>Context:</strong> ${intent.detected_intent.context.join(', ')}</div>`;
-                html += `<div><strong>Symptoms:</strong> ${intent.detected_intent.symptoms.join(', ')}</div>`;
-                
-                if (intent.problem_variations && intent.problem_variations.length > 0) {
-                    html += `<div><strong>Problem Variations (${intent.problem_variations.length}):</strong></div>`;
-                    intent.problem_variations.forEach((variation, i) => {
-                        html += `<div style="margin-left: 20px;">${i+1}. ${variation.problem} (${variation.confidence})</div>`;
-                    });
-                }
-                html += `</div>`;
-            }
-            
-            // Elasticsearch Debug
-            if (data.elasticsearch_debug) {
-                const es = data.elasticsearch_debug;
-                html += `<div class="content-box es-box">`;
-                html += `<h4>🔍 Elasticsearch Debug</h4>`;
-                html += `<div><strong>Index:</strong> ${es.index_name}</div>`;
-                html += `<div><strong>Total Fields:</strong> ${es.total_fields}</div>`;
-                html += `<div><strong>Vector Support:</strong> ${es.has_vector_support ? '✅ Yes' : '❌ No'}</div>`;
-                
-                if (es.vector_fields_in_mapping && Object.keys(es.vector_fields_in_mapping).length > 0) {
-                    html += `<div><strong>Vector Fields:</strong></div>`;
-                    Object.entries(es.vector_fields_in_mapping).forEach(([field, config]) => {
-                        html += `<div style="margin-left: 20px;">${field}: ${config.dims}D (${config.similarity})</div>`;
-                    });
-                }
-                html += `</div>`;
-            }
-            
-            // Search Results Comparison
-            if (data.search_results) {
-                const results = data.search_results;
-                html += `<div class="content-box results-box">`;
-                html += `<h4>🎯 Search Results Comparison</h4>`;
-                
-                // Vector Intent Results
-                if (results.vector_intent_results && results.vector_intent_results.length > 0) {
-                    html += `<div class="success">🤖 Vector Intent Search: ${results.vector_intent_results.length} results</div>`;
-                    results.vector_intent_results.forEach((result, i) => {
-                        html += `<div style="margin-left: 20px;">${i+1}. ${result.product_title} (${result.confidence.toFixed(3)})</div>`;
-                    });
-                } else {
-                    html += `<div class="error">🤖 Vector Intent Search: 0 results</div>`;
-                }
-                
-                // Original Intent Results
-                if (results.intent_results && results.intent_results.length > 0) {
-                    html += `<div class="success">🔤 Original Intent Search: ${results.intent_results.length} results</div>`;
-                } else {
-                    html += `<div class="error">🔤 Original Intent Search: 0 results</div>`;
-                }
-                
-                // Keyword Results
-                if (results.keyword_results && results.keyword_results.length > 0) {
-                    html += `<div class="success">📝 Keyword Search: ${results.keyword_results.length} results</div>`;
-                } else {
-                    html += `<div class="error">📝 Keyword Search: 0 results</div>`;
-                }
-                html += `</div>`;
-            }
-            
-            // Raw data
-            html += `<details style="margin-top: 20px;"><summary>📋 Raw Debug Data</summary><pre>${JSON.stringify(data, null, 2)}</pre></details>`;
-            
-            div.innerHTML = html;
-            results.appendChild(div);
         }
         
-        // Auto-check health on load
-        checkHealth();
+        async function generateScenarios() {
+            showLoading('Generating Scenarios');
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/generate-scenarios`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const data = await response.json();
+                clearLoading();
+                showResult('Generate Scenarios', data, response.ok && data.status === 'success');
+                
+            } catch (error) {
+                clearLoading();
+                showResult('Generate Scenarios', {
+                    status: 'error',
+                    message: error.message
+                }, false);
+            }
+        }
+        
+        async function generateEmbeddings() {
+            showLoading('Generating Embeddings');
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/generate-embeddings`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const data = await response.json();
+                clearLoading();
+                showResult('Generate Embeddings', data, response.ok && data.status === 'success');
+                
+            } catch (error) {
+                clearLoading();
+                showResult('Generate Embeddings', {
+                    status: 'error',
+                    message: error.message
+                }, false);
+            }
+        }
+        
+        async function debugEmbeddings() {
+            showLoading('Debug Embeddings');
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/debug-embeddings`);
+                const data = await response.json();
+                clearLoading();
+                showResult('Debug Embeddings', data, response.ok && data.status === 'success');
+                
+            } catch (error) {
+                clearLoading();
+                showResult('Debug Embeddings', {
+                    status: 'error',
+                    message: error.message
+                }, false);
+            }
+        }
+        
+        async function searchIntent() {
+            const query = document.getElementById('searchQuery').value.trim();
+            if (!query) {
+                alert('Please enter a search query');
+                return;
+            }
+            
+            showLoading('Searching Intent');
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/search-intent`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ query: query })
+                });
+                
+                const data = await response.json();
+                clearLoading();
+                showResult('Search Intent', data, response.ok && data.status === 'success');
+                
+            } catch (error) {
+                clearLoading();
+                showResult('Search Intent', {
+                    status: 'error',
+                    message: error.message
+                }, false);
+            }
+        }
+        
+        async function debugIntent() {
+            const query = document.getElementById('debugQuery').value.trim();
+            if (!query) {
+                alert('Please enter a search query');
+                return;
+            }
+            
+            showLoading('Debug Intent');
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/debug-intent`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ query: query })
+                });
+                
+                const data = await response.json();
+                clearLoading();
+                showResult('Debug Intent', data, response.ok && data.status === 'success');
+                
+            } catch (error) {
+                clearLoading();
+                showResult('Debug Intent', {
+                    status: 'error',
+                    message: error.message
+                }, false);
+            }
+        }
     </script>
 </body>
 </html>

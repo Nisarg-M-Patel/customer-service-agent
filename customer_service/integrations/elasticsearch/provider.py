@@ -8,6 +8,8 @@ from datetime import datetime
 import asyncio
 from google import genai
 from google.genai.types import HttpOptions
+import openai
+from openai import OpenAI
 
 from ...database.models import StandardProduct, IntentResult, ProblemVariation, ProductMatch
 from ...config import Config
@@ -25,12 +27,7 @@ class ElasticsearchProvider:
         self.es = Elasticsearch([config.ELASTICSEARCH_URL])
         
         # Initialize Gemini client for embeddings
-        self.embedding_client = genai.Client(
-            vertexai=True,
-            project=config.CLOUD_PROJECT,
-            location=config.CLOUD_LOCATION,
-            http_options=HttpOptions(api_version="v1")
-        )
+        self.embedding_client = OpenAI(api_key=config.OPENAI_API_KEY)
         
         # Load or generate search configuration
         config_generator = LLMConfigGenerator(config)
@@ -88,21 +85,21 @@ class ElasticsearchProvider:
         # Add vector fields for semantic search
         field_mappings["title_vector"] = {
             "type": "dense_vector",
-            "dims": 768,  # text-embedding-001 produces 768-dim vectors
+            "dims": self.config.EMBEDDING_DIMENSIONS,  
             "index": True,
             "similarity": "cosine"
         }
         
         field_mappings["description_vector"] = {
             "type": "dense_vector", 
-            "dims": 768,  # text-embedding-001 produces 768-dim vectors
+            "dims": self.config.EMBEDDING_DIMENSIONS,  
             "index": True,
             "similarity": "cosine"
         }
         
         field_mappings["usage_scenarios_vectors"] = {
             "type": "dense_vector",
-            "dims": 768,  # text-embedding-001 produces 768-dim vectors
+            "dims": self.config.EMBEDDING_DIMENSIONS,  
             "index": True,
             "similarity": "cosine"
         }
@@ -111,7 +108,7 @@ class ElasticsearchProvider:
         index_config = {
             "settings": {
                 "number_of_shards": 1,
-                "number_of_replicas": 0,  # For development
+                "number_of_replicas": 0,
                 "analysis": {
                     "filter": {
                         "business_synonym_filter": {
@@ -133,13 +130,29 @@ class ElasticsearchProvider:
             },
             "mappings": {
                 "properties": {
+                    # Common fields
                     "product_id": {"type": "keyword"},
+                    "type": {"type": "keyword"},  # "product" or "scenario"
+                    
+                    # Product fields
+                    "title": {"type": "text", "analyzer": "business_search_analyzer"},
+                    "description": {"type": "text", "analyzer": "business_search_analyzer"},
+                    "tags": {"type": "text", "analyzer": "business_search_analyzer"},
+                    "categories": {"type": "text", "analyzer": "business_search_analyzer"},
                     "price": {"type": "float"},
                     "inventory_quantity": {"type": "integer"},
                     "availability": {"type": "boolean"},
                     "created_at": {"type": "date"},
                     "updated_at": {"type": "date"},
-                    **field_mappings
+                    
+                    # Scenario fields
+                    "scenario_text": {"type": "keyword"},
+                    "scenario_vector": {
+                        "type": "dense_vector",
+                        "dims": self.config.EMBEDDING_DIMENSIONS,
+                        "index": True,
+                        "similarity": "cosine"
+                    }
                 }
             }
         }
@@ -152,37 +165,24 @@ class ElasticsearchProvider:
             raise
 
     def _generate_embeddings(self, texts: List[str]) -> List[List[float]]:
-        """Generate embeddings for a list of texts using Gemini."""
+        """Generate embeddings using OpenAI text-embedding-3-large."""
         if not texts:
             return []
         
         try:
-            from google.genai.types import EmbedContentConfig
+            response = self.embedding_client.embeddings.create(
+                model=self.config.EMBEDDING_MODEL,
+                input=texts,
+                dimensions=self.config.EMBEDDING_DIMENSIONS
+            )
             
-            embeddings = []
-            
-            for text in texts:
-                response = self.embedding_client.models.embed_content(
-                    model="gemini-embedding-001",  # Correct model name
-                    contents=text,  # Single text string
-                    config=EmbedContentConfig(
-                        task_type="SEMANTIC_SIMILARITY",  # For search/similarity tasks
-                        output_dimensionality=768  # Standard dimension for compatibility
-                    )
-                )
-                
-                # Extract embedding from response
-                if response.embeddings and len(response.embeddings) > 0:
-                    embeddings.append(response.embeddings[0].values)
-                else:
-                    logger.warning(f"No embedding returned for text: {text[:50]}...")
-                    return []
+            embeddings = [embedding.embedding for embedding in response.data]
             
             logger.debug(f"Generated {len(embeddings)} embeddings with dimension {len(embeddings[0]) if embeddings else 0}")
             return embeddings
             
         except Exception as e:
-            logger.error(f"Failed to generate embeddings: {e}")
+            logger.error(f"Failed to generate OpenAI embeddings: {e}")
             return []
 
     def _generate_product_embeddings(self, product: StandardProduct) -> Dict:
@@ -281,38 +281,77 @@ class ElasticsearchProvider:
             logger.error(f"Failed to index product {product.id}: {e}")
 
     def bulk_index_products(self, products: List[StandardProduct]):
-        """Bulk index multiple products with embeddings."""
+        """Index products and their usage scenarios as separate documents."""
         
         def generate_docs():
             for product in products:
-                # Generate embeddings for this product
-                embeddings = self._generate_product_embeddings(product)
+                # Generate title embedding for product
+                title_embedding = None
+                if product.title:
+                    try:
+                        title_embeddings = self._generate_embeddings([product.title])
+                        title_embedding = title_embeddings[0] if title_embeddings else None
+                    except Exception as e:
+                        logger.error(f"Failed to generate title embedding for {product.id}: {e}")
                 
-                yield {
+                # 1. Index main product document with title vector
+                product_doc = {
                     "_index": self.index_name,
-                    "_id": product.id,
+                    "_id": f"product_{product.id}",
                     "_source": {
                         "product_id": product.id,
+                        "type": "product",
                         "title": product.title,
                         "description": product.description or "",
                         "tags": " ".join(product.tags),
                         "categories": " ".join(product.categories),
-                        "usage_scenarios": " ".join(product.usage_scenarios),
                         "price": product.price,
                         "inventory_quantity": product.inventory_quantity,
                         "availability": product.availability,
                         "created_at": product.created_at,
-                        "updated_at": product.updated_at,
-                        **embeddings  # Add all generated embeddings
+                        "updated_at": product.updated_at
                     }
                 }
+                
+                # Add title vector if generated
+                if title_embedding:
+                    product_doc["_source"]["title_vector"] = title_embedding
+                
+                yield product_doc
+                
+                # 2. Index scenario documents
+                if product.usage_scenarios:
+                    try:
+                        scenario_embeddings = self._generate_embeddings(product.usage_scenarios)
+                        
+                        for i, (scenario, embedding) in enumerate(zip(product.usage_scenarios, scenario_embeddings)):
+                            yield {
+                                "_index": self.index_name,
+                                "_id": f"scenario_{product.id}_{i}",
+                                "_source": {
+                                    "product_id": product.id,
+                                    "type": "scenario",
+                                    "scenario_text": scenario,
+                                    "scenario_vector": embedding
+                                }
+                            }
+                    except Exception as e:
+                        logger.error(f"Failed to generate scenario embeddings for product {product.id}: {e}")
+                        continue
         
         try:
             success_count, failed = helpers.bulk(self.es, generate_docs())
-            logger.info(f"Bulk indexed {success_count} products with embeddings, {len(failed)} failed")
+            
+            if failed:
+                logger.error(f"Failed to index {len(failed)} documents")
+                for failure in failed:
+                    logger.error(f"Failed doc: {failure}")
+            
+            logger.info(f"Bulk indexed {success_count} documents, {len(failed)} failed")
             return success_count
+            
         except Exception as e:
-            logger.error(f"Bulk indexing with embeddings failed: {e}")
+            logger.error(f"Bulk indexing failed: {e}")
             return 0
 
     # Keep existing methods but add vector search capabilities
@@ -452,7 +491,7 @@ class ElasticsearchProvider:
         }
 
     def search_by_intent_with_vectors(self, query: str, **kwargs) -> List[ProductMatch]:
-        """Search products using vector embeddings + intent analysis (hybrid approach)."""
+        """Search products using vector embeddings + intent analysis (updated for nested documents)."""
         
         try:
             # Step 1: Analyze user intent (keep existing logic)
@@ -470,121 +509,119 @@ class ElasticsearchProvider:
                 logger.warning("Could not generate embeddings, falling back to keyword search")
                 return self._fallback_keyword_intent_search(query, problem_variations, **kwargs)
             
-            # Step 3: Build hybrid search query (vector + keyword)
-            search_body = {
-                "query": {
-                    "bool": {
-                        "should": [],
-                        "filter": []
-                    }
-                },
-                "size": 50,  # Get more results for ranking
-                "_source": ["product_id", "title", "price", "usage_scenarios", "availability"]
-            }
+            # Step 3: Search scenario documents using vector similarity
+            all_matches = []
             
-            # Add availability filter if requested
-            if kwargs.get("in_stock_only", False):
-                search_body["query"]["bool"]["filter"].append({
-                    "range": {"inventory_quantity": {"gt": 0}}
-                })
-            
-            # Step 4: Add vector similarity queries for each problem variation
-            for i, (problem_var, embedding) in enumerate(zip(problem_variations, problem_embeddings)):
-                confidence_boost = problem_var.confidence
-                
-                # Vector search against usage scenarios
-                search_body["query"]["bool"]["should"].append({
-                    "script_score": {
-                        "query": {"exists": {"field": "usage_scenarios_vectors"}},
-                        "script": {
-                            "source": """
-                                double maxScore = 0.0;
-                                for (int i = 0; i < doc['usage_scenarios_vectors'].size(); i++) {
-                                    double score = cosineSimilarity(params.query_vector, doc['usage_scenarios_vectors'][i]);
-                                    maxScore = Math.max(maxScore, score);
+            for problem_var, embedding in zip(problem_variations, problem_embeddings):
+                search_body = {
+                    "query": {
+                        "bool": {
+                            "must": [
+                                {"term": {"type": "scenario"}},  # Only scenario documents
+                                {
+                                    "script_score": {
+                                        "query": {"match_all": {}},
+                                        "script": {
+                                            "source": "cosineSimilarity(params.query_vector, 'scenario_vector') + 1.0",
+                                            "params": {"query_vector": embedding}
+                                        }
+                                    }
                                 }
-                                return maxScore * params.confidence_boost;
-                            """,
-                            "params": {
-                                "query_vector": embedding,
-                                "confidence_boost": confidence_boost * 3.0  # High weight for usage scenarios
-                            }
+                            ],
+                            "filter": []
                         }
-                    }
-                })
+                    },
+                    "size": 10,
+                    "_source": ["product_id", "scenario_text"]
+                }
                 
-                # Vector search against descriptions (lower weight)
-                search_body["query"]["bool"]["should"].append({
-                    "script_score": {
-                        "query": {"exists": {"field": "description_vector"}},
-                        "script": {
-                            "source": "cosineSimilarity(params.query_vector, 'description_vector') * params.confidence_boost",
-                            "params": {
-                                "query_vector": embedding,
-                                "confidence_boost": confidence_boost * 1.5  # Medium weight
-                            }
-                        }
-                    }
-                })
+                # Add availability filter if requested
+                if kwargs.get("in_stock_only", False):
+                    # Need to check product documents for inventory
+                    search_body["query"]["bool"]["filter"].append({
+                        "exists": {"field": "product_id"}  # Basic filter for now
+                    })
                 
-                # Vector search against titles (lowest weight)
-                search_body["query"]["bool"]["should"].append({
-                    "script_score": {
-                        "query": {"exists": {"field": "title_vector"}},
-                        "script": {
-                            "source": "cosineSimilarity(params.query_vector, 'title_vector') * params.confidence_boost",
-                            "params": {
-                                "query_vector": embedding,
-                                "confidence_boost": confidence_boost * 1.0  # Low weight
-                            }
-                        }
-                    }
-                })
-                
-                # Add keyword fallback for this problem variation
-                search_body["query"]["bool"]["should"].append({
-                    "multi_match": {
-                        "query": problem_var.problem,
-                        "fields": ["usage_scenarios^2.0", "title^1.0", "description^0.5"],
-                        "boost": confidence_boost * 0.8  # Lower than vector search
-                    }
-                })
+                try:
+                    response = self.es.search(index=self.index_name, body=search_body)
+                    
+                    # Process results
+                    for hit in response["hits"]["hits"]:
+                        source = hit["_source"]
+                        score = hit["_score"]
+                        
+                        # Create ProductMatch
+                        match = ProductMatch(
+                            product_id=source["product_id"],
+                            product_title="",  # Will fill this in next step
+                            confidence=min(score / 2.0, 1.0) * problem_var.confidence,  # Normalize score
+                            reasons=[f"scenario_match: {source['scenario_text']}"],
+                            price=0.0  # Will fill this in next step
+                        )
+                        
+                        all_matches.append(match)
+                        
+                except Exception as e:
+                    logger.error(f"Vector search failed for problem {problem_var.problem}: {e}")
+                    continue
             
-            # Step 5: Execute search
-            try:
-                response = self.es.search(index=self.index_name, body=search_body)
+            # Step 4: Group by product_id and get product details
+            product_groups = {}
+            for match in all_matches:
+                if match.product_id not in product_groups:
+                    product_groups[match.product_id] = []
+                product_groups[match.product_id].append(match)
+            
+            # Step 5: Get product details and create final matches
+            final_matches = []
+            for product_id, matches in product_groups.items():
+                # Get product details
+                product_query = {
+                    "query": {
+                        "bool": {
+                            "must": [
+                                {"term": {"type": "product"}},
+                                {"term": {"product_id": product_id}}
+                            ]
+                        }
+                    },
+                    "size": 1
+                }
                 
-                # Step 6: Process results and create ProductMatch objects
-                product_matches = []
-                for hit in response["hits"]["hits"]:
-                    source = hit["_source"]
-                    score = hit["_score"]
+                try:
+                    product_response = self.es.search(index=self.index_name, body=product_query)
                     
-                    # Normalize score to confidence (0-1 range)
-                    confidence = min(score / 10.0, 1.0)  # Adjust divisor based on your score ranges
-                    
-                    match = ProductMatch(
-                        product_id=source["product_id"],
-                        product_title=source["title"],
-                        confidence=confidence,
-                        reasons=["semantic_match", "intent_analysis"],
-                        price=source.get("price", 0.0)
-                    )
-                    
-                    product_matches.append(match)
-                
-                # Step 7: Sort by confidence and return top results
-                ranked_matches = sorted(product_matches, key=lambda x: x.confidence, reverse=True)
-                logger.info(f"Vector search returned {len(ranked_matches)} matches")
-                return ranked_matches[:10]
-                
-            except Exception as e:
-                logger.error(f"Vector search query failed: {e}")
-                return self._fallback_keyword_intent_search(query, problem_variations, **kwargs)
-                
+                    if product_response["hits"]["hits"]:
+                        product_doc = product_response["hits"]["hits"][0]["_source"]
+                        
+                        # Use best confidence score from all scenario matches
+                        best_confidence = max(m.confidence for m in matches)
+                        all_reasons = []
+                        for m in matches:
+                            all_reasons.extend(m.reasons)
+                        
+                        final_match = ProductMatch(
+                            product_id=product_id,
+                            product_title=product_doc.get("title", ""),
+                            confidence=best_confidence,
+                            reasons=list(set(all_reasons))[:3],  # Unique reasons, max 3
+                            price=product_doc.get("price", 0.0)
+                        )
+                        
+                        final_matches.append(final_match)
+                        
+                except Exception as e:
+                    logger.error(f"Failed to get product details for {product_id}: {e}")
+                    continue
+            
+            # Step 6: Sort by confidence and return top results
+            ranked_matches = sorted(final_matches, key=lambda x: x.confidence, reverse=True)
+            logger.info(f"Vector search returned {len(ranked_matches)} matches")
+            return ranked_matches[:10]
+            
         except Exception as e:
             logger.error(f"Intent vector search failed: {e}")
-            return []
+            return self._fallback_keyword_intent_search(query, problem_variations, **kwargs)
 
     def _fallback_keyword_intent_search(self, query: str, problem_variations: List[ProblemVariation], **kwargs) -> List[ProductMatch]:
         """Fallback to keyword-based intent search if vector search fails."""

@@ -48,3 +48,8 @@ class Config(BaseSettings):
     SEARCH_PROVIDER: str = Field(default="elasticsearch")  # "mock", "elasticsearch", "shopify"
     ENABLE_SEARCH_SUGGESTIONS: bool = Field(default=True)
     MAX_SEARCH_RESULTS: int = Field(default=20)
+
+    # OpenAI settings
+    OPENAI_API_KEY: str | None = Field(default=None)
+    EMBEDDING_MODEL: str = Field(default="text-embedding-3-large")
+    EMBEDDING_DIMENSIONS: int = Field(default=1536)  # Reduced from 3072
