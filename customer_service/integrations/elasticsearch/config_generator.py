@@ -1,5 +1,5 @@
 # customer_service/integrations/elasticsearch/config_generator.py
-"""LLM-based configuration generator for Elasticsearch search setup with automatic initialization."""
+"""LLM-based configuration generator for Elasticsearch search setup with automatic initialization and reverse dictionary."""
 
 import logging
 import re
@@ -25,7 +25,7 @@ class SearchConfigGenerator(ABC):
         pass
 
 class LLMConfigGenerator(SearchConfigGenerator):
-    """Generates search configuration using LLM analysis of products with automatic initialization."""
+    """Generates search configuration using LLM analysis of products with automatic initialization and reverse dictionary."""
     
     def __init__(self, config: Config):
         self.config = config
@@ -40,10 +40,12 @@ class LLMConfigGenerator(SearchConfigGenerator):
         self.config_file_path = Path(__file__).parent / "search_config.json"
         # Path to store usage scenarios
         self.usage_scenarios_file_path = Path(__file__).parent / "usage_scenarios.json"
+        # Path to store reverse dictionary
+        self.reverse_dict_file_path = Path(__file__).parent / "reverse_dictionary.json"
     
     def generate_config(self, sample_products: List[StandardProduct] = None) -> Dict:
         """
-        Analyze sample products with LLM to generate Elasticsearch config and usage scenarios.
+        Analyze sample products with LLM to generate Elasticsearch config, usage scenarios, and reverse dictionary.
         If no products provided, fetch them automatically.
         
         Args:
@@ -58,10 +60,13 @@ class LLMConfigGenerator(SearchConfigGenerator):
         existing_config = self.load_config()
         if existing_config:
             logger.info("Using existing search config")
-            # Also check if we need to generate usage scenarios
+            # Also check if we need to generate usage scenarios and reverse dictionary
             if not self.usage_scenarios_exist():
-                logger.info("Generating missing usage scenarios...")
-                self._auto_generate_usage_scenarios()
+                logger.info("Generating missing usage scenarios and reverse dictionary...")
+                self._auto_generate_usage_scenarios_and_reverse_dict()
+            elif not self._reverse_dictionary_exists():
+                logger.info("Generating missing reverse dictionary...")
+                self._generate_reverse_dict_from_existing_scenarios()
             return existing_config
         
         # If no products provided, fetch them automatically
@@ -102,7 +107,19 @@ class LLMConfigGenerator(SearchConfigGenerator):
             
             # Generate and save usage scenarios for all products
             logger.info("Generating usage scenarios for intent search...")
-            self._generate_and_save_usage_scenarios(sample_products)
+            usage_scenarios_map = self.generate_usage_scenarios(sample_products)
+            
+            if usage_scenarios_map:
+                # Save usage scenarios
+                self._save_usage_scenarios(usage_scenarios_map)
+                
+                # NEW: Build and save reverse dictionary
+                logger.info("Building reverse dictionary from usage scenarios...")
+                reverse_dict = self._build_reverse_dictionary(usage_scenarios_map)
+                self._save_reverse_dictionary(reverse_dict)
+                
+            else:
+                logger.warning("Failed to generate usage scenarios and reverse dictionary")
             
             return config
             
@@ -111,6 +128,94 @@ class LLMConfigGenerator(SearchConfigGenerator):
             fallback_config = self._get_fallback_config()
             self._save_config(fallback_config)
             return fallback_config
+    
+    def _reverse_dictionary_exists(self) -> bool:
+        """Check if reverse dictionary file exists."""
+        return self.reverse_dict_file_path.exists()
+
+    def _auto_generate_usage_scenarios_and_reverse_dict(self):
+        """Auto-generate both usage scenarios and reverse dictionary when config exists but they don't."""
+        try:
+            products = self._fetch_products_automatically()
+            if products:
+                usage_scenarios_map = self.generate_usage_scenarios(products)
+                if usage_scenarios_map:
+                    self._save_usage_scenarios(usage_scenarios_map)
+                    
+                    # Build and save reverse dictionary
+                    reverse_dict = self._build_reverse_dictionary(usage_scenarios_map)
+                    self._save_reverse_dictionary(reverse_dict)
+                    
+                    logger.info(f"Auto-generated usage scenarios and reverse dictionary")
+                else:
+                    logger.warning("Failed to generate usage scenarios and reverse dictionary")
+            else:
+                logger.warning("No products available for usage scenario and reverse dictionary generation")
+        except Exception as e:
+            logger.error(f"Auto generation failed: {e}")
+
+    def _generate_reverse_dict_from_existing_scenarios(self):
+        """Generate reverse dictionary from existing usage scenarios."""
+        try:
+            usage_scenarios = self.load_usage_scenarios()
+            if usage_scenarios:
+                reverse_dict = self._build_reverse_dictionary(usage_scenarios)
+                self._save_reverse_dictionary(reverse_dict)
+                logger.info("Generated reverse dictionary from existing usage scenarios")
+            else:
+                logger.warning("No existing usage scenarios found")
+        except Exception as e:
+            logger.error(f"Failed to generate reverse dictionary from existing scenarios: {e}")
+
+    def _build_reverse_dictionary(self, usage_scenarios: Dict[str, List[str]]) -> Dict[str, List[str]]:
+        """Build reverse dictionary from usage scenarios: {problem_keyword: [product_ids]}"""
+        reverse_dict = {}
+        
+        for product_id, scenarios in usage_scenarios.items():
+            for scenario in scenarios:
+                scenario = scenario.strip()
+                if scenario:
+                    if scenario not in reverse_dict:
+                        reverse_dict[scenario] = []
+                    reverse_dict[scenario].append(product_id)
+        
+        logger.info(f"Built reverse dictionary with {len(reverse_dict)} problem keywords")
+        return reverse_dict
+
+    def _save_reverse_dictionary(self, reverse_dict: Dict[str, List[str]]):
+        """Save reverse dictionary to JSON file."""
+        try:
+            # Ensure directory exists
+            self.reverse_dict_file_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            reverse_dict_with_meta = {
+                "reverse_dictionary": reverse_dict,
+                "generated_at": str(datetime.now()),
+                "total_problems": len(reverse_dict),
+                "total_products": len(set().union(*reverse_dict.values())) if reverse_dict else 0
+            }
+            
+            with open(self.reverse_dict_file_path, 'w') as f:
+                json.dump(reverse_dict_with_meta, f, indent=2)
+                
+            logger.info(f"Saved reverse dictionary to {self.reverse_dict_file_path}")
+            
+        except Exception as e:
+            logger.error(f"Error saving reverse dictionary: {e}")
+
+    def load_reverse_dictionary(self) -> Optional[Dict[str, List[str]]]:
+        """Load existing reverse dictionary from JSON file."""
+        try:
+            if self.reverse_dict_file_path.exists():
+                with open(self.reverse_dict_file_path, 'r') as f:
+                    data = json.load(f)
+                
+                reverse_dict = data.get("reverse_dictionary", {})
+                logger.info(f"Loaded reverse dictionary with {len(reverse_dict)} problem keywords")
+                return reverse_dict
+        except Exception as e:
+            logger.error(f"Error loading reverse dictionary: {e}")
+        return None
     
     def _fetch_products_automatically(self) -> List[StandardProduct]:
         """Automatically fetch products from available providers."""
@@ -146,34 +251,6 @@ class LLMConfigGenerator(SearchConfigGenerator):
         except Exception as e:
             logger.error(f"Failed to auto-fetch products: {e}")
             return []
-    
-    def _auto_generate_usage_scenarios(self):
-        """Auto-generate usage scenarios when config exists but scenarios don't."""
-        try:
-            products = self._fetch_products_automatically()
-            if products:
-                usage_scenarios_map = self.generate_usage_scenarios(products)
-                if usage_scenarios_map:
-                    self._save_usage_scenarios(usage_scenarios_map)
-                    logger.info(f"Auto-generated usage scenarios for {len(usage_scenarios_map)} products")
-                else:
-                    logger.warning("Failed to generate usage scenarios")
-            else:
-                logger.warning("No products available for usage scenario generation")
-        except Exception as e:
-            logger.error(f"Auto usage scenario generation failed: {e}")
-    
-    def _generate_and_save_usage_scenarios(self, products: List[StandardProduct]):
-        """Generate usage scenarios for products and save to file."""
-        try:
-            usage_scenarios_map = self.generate_usage_scenarios(products)
-            if usage_scenarios_map:
-                self._save_usage_scenarios(usage_scenarios_map)
-                logger.info(f"Generated usage scenarios for {len(usage_scenarios_map)} products")
-            else:
-                logger.warning("Failed to generate usage scenarios")
-        except Exception as e:
-            logger.error(f"Failed to generate usage scenarios: {e}")
     
     def analyze_intent(self, user_query: str) -> IntentResult:
         """Analyze user query to extract intent and problems."""
@@ -667,5 +744,7 @@ class LLMConfigGenerator(SearchConfigGenerator):
             self.config_file_path.unlink()
         if self.usage_scenarios_file_path.exists():
             self.usage_scenarios_file_path.unlink()
+        if self.reverse_dict_file_path.exists():
+            self.reverse_dict_file_path.unlink()
         
         return self.generate_config(sample_products)

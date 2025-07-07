@@ -86,6 +86,186 @@ def search_products(query: str, category: Optional[str]=None) -> dict:
         logger.error(f"Error searching products: {e}")
         return {"results": [], "error": str(e)}
 
+def intent_search_products(query: str) -> dict:
+
+    """
+    Search for products using intent analysis and two-tower approach.
+    
+    Args:
+        query: User query expressing a problem or need
+        
+    Returns:
+        Dictionary with intent-based product results
+    """
+    logger.info(f"Intent search for: {query}")
+    
+    try:
+        # Get singleton integration manager instance
+        integration_manager = IntegrationManager.get_instance()
+        
+        # Step 1: Extract primary intent from user query using LLM
+        from ..integrations.elasticsearch.config_generator import LLMConfigGenerator
+        from ..config import Config
+        from ..database.models import IntentResult
+        
+        config = Config()
+        config_generator = LLMConfigGenerator(config)
+        
+        # Load business context from existing config
+        search_config = config_generator.load_config()
+        business_type = search_config.get("business_type", "general") if search_config else "general"
+        domain_context = search_config.get("domain_keywords", []) if search_config else []
+        
+        try:
+            intent = config_generator.analyze_intent(query)
+            logger.info(f"Extracted intent: {intent.primary_problem}")
+        except Exception as e:
+            logger.error(f"Intent extraction failed: {e}")
+            # Fallback intent
+            intent = IntentResult(
+                primary_problem="general_need",
+                context=[],
+                symptoms=[],
+                urgency="medium"
+            )
+        
+        # Step 2: Look up solutions in reverse dictionary
+        reverse_dict_results = []
+        try:
+            reverse_dict = config_generator.load_reverse_dictionary()
+            if reverse_dict and intent.primary_problem in reverse_dict:
+                reverse_dict_results = reverse_dict[intent.primary_problem]
+                logger.info(f"Reverse dictionary found {len(reverse_dict_results)} products")
+            else:
+                logger.info(f"No reverse dictionary entry found for problem: {intent.primary_problem}")
+        except Exception as e:
+            logger.error(f"Reverse dictionary lookup failed: {e}")
+        
+        # Step 3: Generate additional solution keywords using LLM
+        solution_keywords = []
+        try:
+            prompt = f"""
+            Given this {business_type} customer problem, suggest 3-5 product category keywords that could help solve it.
+            
+            Business context: {business_type}
+            Domain keywords: {', '.join(domain_context)}
+            Problem: {intent.primary_problem}
+            Context: {', '.join(intent.context)}
+            Symptoms: {', '.join(intent.symptoms)}
+            
+            Think about what types of products in this business domain could address this problem.
+            Consider the product categories that would be available in a {business_type} business.
+            
+            Respond with 3-5 simple product category keywords:
+            ["keyword1", "keyword2", "keyword3"]
+            
+            Focus on product types, not specific brands or models.
+            """
+            
+            response = config_generator.client.models.generate_content(
+                model="gemini-2.0-flash-exp",
+                contents=prompt
+            )
+            
+            result_text = response.text.strip()
+            
+            # Extract JSON array from response
+            if "```json" in result_text:
+                result_text = result_text.split("```json")[1].split("```")[0]
+            elif "```" in result_text:
+                result_text = result_text.split("```")[1].split("```")[0]
+            elif "[" in result_text and "]" in result_text:
+                # Extract just the array part
+                start = result_text.find("[")
+                end = result_text.rfind("]") + 1
+                result_text = result_text[start:end]
+            
+            import json
+            keywords = json.loads(result_text)
+            
+            # Validate and clean keywords
+            for keyword in keywords:
+                if isinstance(keyword, str) and keyword.strip():
+                    solution_keywords.append(keyword.strip())
+            
+            solution_keywords = solution_keywords[:5]  # Max 5 keywords
+            logger.info(f"Generated solution keywords: {solution_keywords}")
+            
+        except Exception as e:
+            logger.error(f"Solution keyword generation failed: {e}")
+            # Generic fallback - use domain keywords if available
+            if domain_context:
+                solution_keywords = domain_context[:3]
+            else:
+                solution_keywords = ["products", "supplies"]
+        
+        # Step 4: Search for products using solution keywords
+        keyword_results = []
+        for keyword in solution_keywords:
+            keyword_products = integration_manager.search_products(query=keyword)
+            for product in keyword_products:
+                keyword_results.append({
+                    "product_id": product.id,
+                    "name": product.title,
+                    "description": product.description,
+                    "price": product.price,
+                    "availability": product.availability,
+                    "match_type": "solution_keyword",
+                    "match_reason": f"Keyword: {keyword}"
+                })
+        
+        # Step 5: Get product details for reverse dictionary results
+        reverse_dict_formatted = []
+        for product_id in reverse_dict_results:
+            product = integration_manager.get_product_by_id(product_id)
+            if product:
+                reverse_dict_formatted.append({
+                    "product_id": product.id,
+                    "name": product.title,
+                    "description": product.description,
+                    "price": product.price,
+                    "availability": product.availability,
+                    "match_type": "usage_scenario",
+                    "match_reason": f"Pre-computed solution for: {intent.primary_problem}"
+                })
+        
+        # Step 6: Combine and deduplicate results
+        all_results = reverse_dict_formatted + keyword_results
+        
+        # Deduplicate by product_id (prioritize reverse dict results)
+        seen_ids = set()
+        final_results = []
+        
+        for result in all_results:
+            if result["product_id"] not in seen_ids:
+                seen_ids.add(result["product_id"])
+                final_results.append(result)
+        
+        return {
+            "results": final_results[:10],  # Top 10 results
+            "total": len(final_results),
+            "intent": {
+                "primary_problem": intent.primary_problem,
+                "context": intent.context,
+                "urgency": intent.urgency
+            },
+            "business_context": {
+                "business_type": business_type,
+                "domain_keywords": domain_context
+            },
+            "reverse_dict_matches": len(reverse_dict_formatted),
+            "keyword_matches": len(keyword_results),
+            "solution_keywords_used": solution_keywords
+        }
+        
+    except Exception as e:
+        logger.error(f"Intent search failed: {e}")
+        return {
+            "results": [],
+            "error": str(e),
+            "intent": None
+        }
+
 def get_product_details(product_id: str) -> dict:
     """
     Get detailed information about a specific product.
