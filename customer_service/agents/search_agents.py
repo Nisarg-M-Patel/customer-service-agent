@@ -1,74 +1,31 @@
 # customer_service/agents/search_agents.py
-"""Proper ADK parallel agents implementation using ParallelAgent and SequentialAgent."""
+"""Efficient single-agent search implementation to avoid quota exhaustion."""
 
-from google.adk.agents import SequentialAgent, ParallelAgent, LlmAgent
-from ..tools.products import search_products, intent_search_products
+from google.adk.agents import LlmAgent
+from ..tools.products import search_products, intent_search_products, load_search_results_from_artifacts
 
-# Individual search agents that write to shared state
-keyword_search_agent = LlmAgent(
-    name="KeywordSearchAgent",
-    model="gemini-2.0-flash-exp",
-    instruction="""
-    You handle direct keyword-based product searches.
-    
-    Extract obvious product keywords from the user query and use search_products to find matches.
-    Focus on:
-    - Product names, categories, types
-    - Brand names, specific items  
-    - Clear product-related nouns
-    
-    Save your results to the 'keyword_results' state key.
-    """,
-    tools=[search_products],
-    output_key="keyword_results"
-)
-
-intent_search_agent = LlmAgent(
-    name="IntentSearchAgent", 
-    model="gemini-2.0-flash-exp",
-    instruction="""
-    You handle problem/need-based product searches using intent analysis.
-    
-    Analyze the user query for underlying problems, needs, or goals:
-    - What is the user trying to achieve?
-    - What problem are they trying to solve?
-    - What outcome do they want?
-    
-    Use intent_search_products which analyzes intent and finds solutions.
-    Save your results to the 'intent_results' state key.
-    """,
-    tools=[intent_search_products],
-    output_key="intent_results"
-)
-
-# Parallel execution of both search agents
-parallel_search = ParallelAgent(
-    name="ParallelProductSearch",
-    sub_agents=[keyword_search_agent, intent_search_agent]
-)
-
-# Agent that combines results from both searches
-results_synthesizer = LlmAgent(
-    name="SearchSynthesizer",
-    model="gemini-2.0-flash-exp", 
-    instruction="""
-    You combine and present results from parallel keyword and intent searches.
-    
-    Read the results from state keys 'keyword_results' and 'intent_results'.
-    
-    Combine the results by:
-    1. Prioritizing keyword matches (direct matches)
-    2. Adding intent matches that aren't duplicates
-    3. Presenting both types clearly to the user
-    4. Explaining why each product was recommended
-    
-    Provide a comprehensive response that gives customers both obvious matches 
-    and intelligent problem-solving recommendations.
-    """
-)
-
-# Overall workflow: parallel search → synthesis
-coordinated_search_workflow = SequentialAgent(
+# Single agent that does everything - no parallel LLM calls
+coordinated_search_workflow = LlmAgent(
     name="CoordinatedProductSearch",
-    sub_agents=[parallel_search, results_synthesizer]
+    model="gemini-2.0-flash-exp",
+    instruction="""
+    You handle comprehensive product searches efficiently using multiple search approaches.
+    
+    For any product search request:
+    1. First call search_products for direct keyword matches
+    2. Then call intent_search_products for problem-solving recommendations  
+    3. Finally call load_search_results_from_artifacts to get the complete results
+    4. Combine both datasets and provide a comprehensive response
+    
+    Your response should:
+    - Show direct product matches from keyword search
+    - Include intelligent suggestions from intent analysis
+    - Explain why each product was recommended
+    - Provide clear product details (ID, name, price, availability)
+    - Group results logically for easy scanning
+    
+    If no results found, explain clearly and suggest alternatives.
+    You are the complete search solution.
+    """,
+    tools=[search_products, intent_search_products, load_search_results_from_artifacts]
 )
