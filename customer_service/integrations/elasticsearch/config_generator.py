@@ -43,6 +43,20 @@ class LLMConfigGenerator(SearchConfigGenerator):
         # Path to store reverse dictionary
         self.reverse_dict_file_path = Path(__file__).parent / "reverse_dictionary.json"
     
+    def _get_business_context(self) -> tuple[str, List[str]]:
+        """Get business type and domain keywords from existing config or fallback."""
+        try:
+            search_config = self.load_config()
+            if search_config:
+                business_type = search_config.get("business_type", "general")
+                domain_keywords = search_config.get("domain_keywords", [])
+                return business_type, domain_keywords
+        except Exception as e:
+            logger.error(f"Error loading business context: {e}")
+        
+        # Fallback
+        return "general", ["products", "items"]
+    
     def generate_config(self, sample_products: List[StandardProduct] = None) -> Dict:
         """
         Analyze sample products with LLM to generate Elasticsearch config, usage scenarios, and reverse dictionary.
@@ -255,14 +269,18 @@ class LLMConfigGenerator(SearchConfigGenerator):
     def analyze_intent(self, user_query: str) -> IntentResult:
         """Analyze user query to extract intent and problems."""
         
+        business_type, domain_keywords = self._get_business_context()
+        
         prompt = f"""
-        Analyze this customer query for gardening problems and intent:
+        Analyze this customer query for business problems and intent:
         
         Query: "{user_query}"
+        Business Context: {business_type}
+        Domain: {', '.join(domain_keywords[:5])}
         
         Extract:
-        1. Primary problem (single phrase like "weed_removal" or "plant_health_decline")
-        2. Context (plant types, garden areas, etc.)
+        1. Primary problem (single phrase like "inventory_shortage" or "customer_retention")
+        2. Context (relevant business areas, product types, etc.)
         3. Symptoms (visible issues mentioned)
         4. Urgency (low/medium/high based on language used)
         
@@ -292,7 +310,7 @@ class LLMConfigGenerator(SearchConfigGenerator):
             intent_data = json.loads(result_text)
             
             return IntentResult(
-                primary_problem=intent_data.get("primary_problem", "general_gardening"),
+                primary_problem=intent_data.get("primary_problem", f"general_{business_type}"),
                 context=intent_data.get("context", []),
                 symptoms=intent_data.get("symptoms", []),
                 urgency=intent_data.get("urgency", "medium")
@@ -302,7 +320,7 @@ class LLMConfigGenerator(SearchConfigGenerator):
             logger.error(f"Intent analysis failed: {e}")
             # Fallback intent
             return IntentResult(
-                primary_problem="general_gardening",
+                primary_problem=f"general_{business_type}",
                 context=[],
                 symptoms=[],
                 urgency="medium"
@@ -311,23 +329,27 @@ class LLMConfigGenerator(SearchConfigGenerator):
     def expand_problems(self, intent: IntentResult) -> List[ProblemVariation]:
         """Expand primary problem into related problem variations."""
         
-        prompt = f"""
-        Given this gardening problem, generate 4-5 related problems that might be causing it:
+        business_type, domain_keywords = self._get_business_context()
         
+        prompt = f"""
+        Given this business problem, generate 4-5 related problems that might be causing it:
+        
+        Business Type: {business_type}
         Primary Problem: {intent.primary_problem}
         Context: {', '.join(intent.context)}
         Symptoms: {', '.join(intent.symptoms)}
+        Domain Keywords: {', '.join(domain_keywords[:5])}
         
         Generate related problems with confidence scores (0.1-1.0):
         - Include the original problem with high confidence
         - Add broader categories and specific variations
-        - Consider root causes and related issues
+        - Consider root causes and related issues within this business domain
         
         Example format:
         [
-            {{"problem": "nutrient_deficiency", "confidence": 0.9, "category": "feeding"}},
-            {{"problem": "overwatering", "confidence": 0.7, "category": "watering"}},
-            {{"problem": "soil_ph_imbalance", "confidence": 0.6, "category": "soil"}}
+            {{"problem": "inventory_shortage", "confidence": 0.9, "category": "supply"}},
+            {{"problem": "quality_issues", "confidence": 0.7, "category": "product"}},
+            {{"problem": "customer_satisfaction", "confidence": 0.6, "category": "service"}}
         ]
         
         Respond with only the JSON array.
@@ -378,6 +400,8 @@ class LLMConfigGenerator(SearchConfigGenerator):
             logger.info("Using existing usage scenarios")
             return existing_scenarios
         
+        business_type, domain_keywords = self._get_business_context()
+        
         # Process products in batches to avoid token limits
         batch_size = 5
         all_usage_scenarios = {}
@@ -397,19 +421,16 @@ class LLMConfigGenerator(SearchConfigGenerator):
                 })
             
             prompt = f"""
-            Analyze these garden products and generate 3-5 SHORT problem keywords each product solves.
+            Analyze these {business_type} products and generate 3-5 SHORT problem keywords each product solves.
 
+            Business Type: {business_type}
+            Domain Context: {', '.join(domain_keywords[:5])}
             Products: {json.dumps(product_data, indent=2)}
 
             For each product, generate 3-5 SINGLE WORDS or SHORT PHRASES (max 2-3 words):
-            - Use underscore format: "weed_removal", "nutrient_deficiency", "poor_drainage"
+            - Use underscore format: "problem_solving", "efficiency_improvement", "cost_reduction"
             - NO sentences, NO explanations, NO "addresses the problem of"
-            - Think: what would someone type when searching for a solution?
-
-            Examples:
-            - Fertilizer: ["nutrient_deficiency", "yellowing_leaves", "poor_growth", "plant_feeding"]
-            - Trowel: ["transplanting", "weed_removal", "small_digging", "garden_maintenance"]
-            - Seeds: ["vegetable_growing", "food_production", "garden_starting"]
+            - Think: what would someone type when searching for a solution in this business domain?
 
             Respond with JSON - ONLY short problem keywords:
             {{
@@ -441,7 +462,7 @@ class LLMConfigGenerator(SearchConfigGenerator):
                 logger.error(f"Usage scenario generation failed for batch: {e}")
                 # Add fallback scenarios for this batch
                 for product in batch:
-                    all_usage_scenarios[product.id] = ["general_gardening", "garden_maintenance"]
+                    all_usage_scenarios[product.id] = [f"general_{business_type}", "business_operations"]
         
         return all_usage_scenarios
     
@@ -615,7 +636,7 @@ class LLMConfigGenerator(SearchConfigGenerator):
         
         Example format:
         {{
-            "business_type": "garden_center",
+            "business_type": "retail_store",
             "searchable_fields": {{
                 "title": {{"weight": 3.0, "fuzzy": true}},
                 "description": {{"weight": 1.5, "fuzzy": true}},
@@ -623,10 +644,10 @@ class LLMConfigGenerator(SearchConfigGenerator):
                 "categories": {{"weight": 1.8, "fuzzy": false}}
             }},
             "synonym_groups": [
-                "fertilizer,plant food,nutrients,feed",
-                "soil,dirt,potting mix,growing medium"
+                "product,item,merchandise",
+                "buy,purchase,order"
             ],
-            "domain_keywords": ["gardening", "plants", "outdoor", "growing"],
+            "domain_keywords": ["retail", "products", "shopping"],
             "search_settings": {{
                 "fuzzy_distance": 2,
                 "minimum_should_match": "75%",

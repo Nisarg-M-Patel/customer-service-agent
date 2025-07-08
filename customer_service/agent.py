@@ -33,10 +33,11 @@ root_agent = Agent(
     global_instruction=GLOBAL_INSTRUCTION,
     instruction=INSTRUCTION,
     name=config.agent_settings.name,
-    tools=[
-        # NEW: Proper ADK parallel workflow (ParallelAgent + SequentialAgent)
+    sub_agents=[
+        # MOVED: ADK parallel workflow goes here, not in tools
         coordinated_search_workflow,
-        
+    ],
+    tools=[
         # EXISTING: Product tools (kept)
         get_product_details,
         

@@ -47,6 +47,13 @@
     </div>
     
     <div class="section">
+        <h3>System Warmup</h3>
+        <p>Complete system refresh: Sync products, regenerate config, scenarios, and reverse dictionary</p>
+        <p>This will overwrite all existing configurations and rebuild from scratch</p>
+        <button onclick="systemWarmup()">System Warmup</button>
+    </div>
+    
+    <div class="section">
         <h3>Sync Products</h3>
         <p>Sync products from your provider (Shopify/Mock) to Elasticsearch</p>
         <button onclick="syncProducts()">Sync Products</button>
@@ -135,6 +142,30 @@
             } catch (error) {
                 clearLoading();
                 showResult('Health Check', {
+                    status: 'error',
+                    message: error.message
+                }, false);
+            }
+        }
+        
+        async function systemWarmup() {
+            showLoading('System Warmup');
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/system-warmup`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const data = await response.json();
+                clearLoading();
+                showResult('System Warmup', data, response.ok && data.status === 'success');
+                
+            } catch (error) {
+                clearLoading();
+                showResult('System Warmup', {
                     status: 'error',
                     message: error.message
                 }, false);

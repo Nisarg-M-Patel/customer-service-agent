@@ -1,6 +1,6 @@
 {
-  "index_name": "garden_products",
-  "business_type": "garden_supply",
+  "index_name": "tiny_books_products",
+  "business_type": "bookstore",
   "searchable_fields": {
     "title": {
       "weight": 3.0,
@@ -10,41 +10,30 @@
       "weight": 1.5,
       "fuzzy": true
     },
-    "tags": {
-      "weight": 2.5,
-      "fuzzy": false
-    },
     "categories": {
-      "weight": 2.0,
+      "weight": 2.5,
       "fuzzy": false
     }
   },
   "synonym_groups": [
-    "soil,potting mix,dirt,compost",
-    "seeds,seedlings,starts",
-    "fertilizer,plant food,plant feed,nutrients",
-    "tools,equipment,implements",
-    "plants,flowers,vegetation",
-    "organic,natural,eco-friendly",
-    "trowel,hand shovel,gardening shovel"
+    "tiny,mini,small",
+    "books,tales,reads",
+    "shelves,bookshelves",
+    "starter,kit,bundle",
+    "display,showcase,store"
   ],
   "search_settings": {
-    "fuzzy_distance": 2,
-    "minimum_should_match": "75%",
+    "fuzzy_distance": 1,
+    "minimum_should_match": "50%",
     "boost_exact_matches": true
   },
   "domain_keywords": [
-    "gardening",
-    "plants",
-    "seeds",
-    "soil",
-    "fertilizer",
-    "outdoor",
-    "indoor",
-    "growing",
-    "lawn",
-    "garden"
+    "books",
+    "miniature",
+    "tiny",
+    "shelves",
+    "reading"
   ],
-  "generated_at": "2025-07-01 16:07:49.171610",
+  "generated_at": "2025-07-07 15:13:44.530307",
   "product_count_analyzed": 30
 }
