@@ -1,6 +1,6 @@
 {
   "index_name": "tiny_books_products",
-  "business_type": "bookstore",
+  "business_type": "general",
   "searchable_fields": {
     "title": {
       "weight": 3.0,
@@ -10,30 +10,22 @@
       "weight": 1.5,
       "fuzzy": true
     },
+    "tags": {
+      "weight": 2.0,
+      "fuzzy": false
+    },
     "categories": {
-      "weight": 2.5,
+      "weight": 1.8,
       "fuzzy": false
     }
   },
-  "synonym_groups": [
-    "tiny,mini,small",
-    "books,tales,reads",
-    "shelves,bookshelves",
-    "starter,kit,bundle",
-    "display,showcase,store"
-  ],
+  "synonym_groups": [],
   "search_settings": {
-    "fuzzy_distance": 1,
-    "minimum_should_match": "50%",
+    "fuzzy_distance": 2,
+    "minimum_should_match": "75%",
     "boost_exact_matches": true
   },
-  "domain_keywords": [
-    "books",
-    "miniature",
-    "tiny",
-    "shelves",
-    "reading"
-  ],
-  "generated_at": "2025-07-07 15:13:44.530307",
+  "domain_keywords": [],
+  "generated_at": "2025-07-10 12:17:13.889570",
   "product_count_analyzed": 30
 }

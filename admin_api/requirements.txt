@@ -1,0 +1,7 @@
+pydantic-settings
+pydantic
+elasticsearch>=8.0.0,<9.0.0
+fastapi
+uvicorn
+openai
+../customer_service # Local package dependency
