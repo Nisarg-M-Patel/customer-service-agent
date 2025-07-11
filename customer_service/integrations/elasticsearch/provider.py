@@ -37,17 +37,30 @@ class ElasticsearchProvider:
         self.search_config = self.load_search_config()
         
         if not self.search_config:
-            logger.info("No search config found, generating automatically...")
-            
-            # Import here to avoid circular import
-            from .config_generator import LLMConfigGenerator
-            config_generator = LLMConfigGenerator(self.config)
-            self.search_config = config_generator.generate_config()
-            
-            if not self.search_config:
-                raise ValueError("Failed to generate search configuration")
+            logger.info("No search config found, using fallback for startup...")
+            self.search_config = self._get_fallback_config()
         
         self.index_name = self.search_config["index_name"]
+
+    def _get_fallback_config(self):
+        """Fallback configuration for startup."""
+        return {
+            "index_name": "products",
+            "business_type": "general", 
+            "searchable_fields": {
+                "title": {"weight": 3.0, "fuzzy": True},
+                "description": {"weight": 1.5, "fuzzy": True},
+                "tags": {"weight": 2.0, "fuzzy": False},
+                "categories": {"weight": 1.8, "fuzzy": False}
+            },
+            "synonym_groups": [],
+            "search_settings": {
+                "fuzzy_distance": 2,
+                "minimum_should_match": "75%",
+                "boost_exact_matches": True
+            },
+            "domain_keywords": []
+        }
 
     # ============= CONFIG STORAGE METHODS =============
     

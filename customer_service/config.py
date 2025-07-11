@@ -35,9 +35,9 @@ class Config(BaseSettings):
     DATABASE_URL: str = Field(default="sqlite:///customer_service.db")
     
     # Elasticsearch settings
-    ELASTICSEARCH_URL: str = Field(default="http://localhost:9200")
-    ELASTICSEARCH_USER: str | None = Field(default=None)
-    ELASTICSEARCH_PASSWORD: str | None = Field(default=None)
+    ELASTICSEARCH_URL: str = Field(default="http://34.63.210.51:9200")
+    ELASTICSEARCH_USER: str | None = Field(default="elastic")
+    ELASTICSEARCH_PASSWORD: str | None = Field(default="elastic-mvp-2024")
     ELASTICSEARCH_VERIFY_CERTS: bool = Field(default=True)
     
     # Shopify settings (for syncing data to Elasticsearch)
