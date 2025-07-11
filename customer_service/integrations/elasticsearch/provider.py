@@ -1,5 +1,5 @@
 # customer_service/integrations/elasticsearch/provider.py
-"""Clean Elasticsearch provider - just basic search and indexing."""
+"""Clean Elasticsearch provider - basic search, indexing, and config storage."""
 
 import logging
 from typing import List, Dict, Optional
@@ -8,12 +8,11 @@ from datetime import datetime
 
 from ...database.models import StandardProduct
 from ...config import Config
-from .config_generator import LLMConfigGenerator
 
 logger = logging.getLogger(__name__)
 
 class ElasticsearchProvider:
-    """Elasticsearch provider for basic product search and indexing."""
+    """Elasticsearch provider for basic product search, indexing, and config storage."""
     
     def __init__(self, config: Config):
         self.config = config
@@ -21,23 +20,132 @@ class ElasticsearchProvider:
         # Initialize Elasticsearch client
         self.es = Elasticsearch([config.ELASTICSEARCH_URL])
         
-        # Load search configuration
-        config_generator = LLMConfigGenerator(config)
-        self.search_config = config_generator.load_config()
+        # Load search configuration (lazy to avoid circular imports)
+        self.search_config = None
+        self.index_name = None
+        self._initialize_search_config()
+        
+        # Create index if needed
+        self._create_index()
+        
+        logger.info(f"Initialized Elasticsearch provider for {self.search_config['business_type']}")
+
+    def _initialize_search_config(self):
+        """Initialize search config with lazy loading to avoid circular imports."""
+        
+        # First try to load existing config
+        self.search_config = self.load_search_config()
         
         if not self.search_config:
             logger.info("No search config found, generating automatically...")
+            
+            # Import here to avoid circular import
+            from .config_generator import LLMConfigGenerator
+            config_generator = LLMConfigGenerator(self.config)
             self.search_config = config_generator.generate_config()
             
             if not self.search_config:
                 raise ValueError("Failed to generate search configuration")
         
         self.index_name = self.search_config["index_name"]
-        
-        # Create index if needed
-        self._create_index()
-        
-        logger.info(f"Initialized Elasticsearch provider for {self.search_config['business_type']}")
+
+    # ============= CONFIG STORAGE METHODS =============
+    
+    def save_config_document(self, config_name: str, data: dict) -> bool:
+        """Save a config document to the same index as products."""
+        try:
+            doc = {
+                "type": "config",
+                "config_name": config_name,
+                "data": data,
+                "updated_at": datetime.now().isoformat()
+            }
+            
+            self.es.index(
+                index=self.index_name,
+                id=f"config_{config_name}",
+                body=doc
+            )
+            
+            logger.info(f"Saved config '{config_name}' to Elasticsearch")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to save config '{config_name}': {e}")
+            return False
+
+    def load_config_document(self, config_name: str) -> Optional[dict]:
+        """Load a config document from Elasticsearch."""
+        try:
+            response = self.es.get(
+                index=self.index_name,
+                id=f"config_{config_name}"
+            )
+            
+            config_data = response["_source"]["data"]
+            logger.info(f"Loaded config '{config_name}' from Elasticsearch")
+            return config_data
+            
+        except Exception as e:
+            logger.debug(f"Config '{config_name}' not found in Elasticsearch: {e}")
+            return None
+
+    def config_exists(self, config_name: str) -> bool:
+        """Check if a config document exists in Elasticsearch."""
+        try:
+            self.es.get(index=self.index_name, id=f"config_{config_name}")
+            return True
+        except:
+            return False
+
+    def list_configs(self) -> List[str]:
+        """List all config documents in the index."""
+        try:
+            search_body = {
+                "query": {"term": {"type": "config"}},
+                "size": 100,
+                "_source": ["config_name"]
+            }
+            
+            response = self.es.search(index=self.index_name, body=search_body)
+            
+            configs = []
+            for hit in response["hits"]["hits"]:
+                configs.append(hit["_source"]["config_name"])
+            
+            return configs
+            
+        except Exception as e:
+            logger.error(f"Failed to list configs: {e}")
+            return []
+
+    # ============= CONVENIENCE METHODS FOR SPECIFIC CONFIGS =============
+    
+    def save_search_config(self, config: dict) -> bool:
+        """Save search configuration."""
+        return self.save_config_document("search_config", config)
+
+    def load_search_config(self) -> Optional[dict]:
+        """Load search configuration."""
+        return self.load_config_document("search_config")
+
+    def save_usage_scenarios(self, scenarios: dict) -> bool:
+        """Save usage scenarios."""
+        return self.save_config_document("usage_scenarios", scenarios)
+
+    def load_usage_scenarios(self) -> Optional[dict]:
+        """Load usage scenarios."""
+        return self.load_config_document("usage_scenarios")
+
+    def save_reverse_dictionary(self, reverse_dict: dict) -> bool:
+        """Save reverse dictionary."""
+        return self.save_config_document("reverse_dictionary", reverse_dict)
+
+    def load_reverse_dictionary(self) -> Optional[dict]:
+        """Load reverse dictionary."""
+        return self.load_config_document("reverse_dictionary")
+
+    # ============= INDEX MANAGEMENT =============
 
     def _create_index(self):
         """Create Elasticsearch index with proper configuration."""
@@ -75,6 +183,8 @@ class ElasticsearchProvider:
             },
             "mappings": {
                 "properties": {
+                    # Product fields
+                    "type": {"type": "keyword"},  # NEW: distinguish products vs configs
                     "product_id": {"type": "keyword"},
                     "title": {"type": "text", "analyzer": "business_search_analyzer"},
                     "description": {"type": "text", "analyzer": "business_search_analyzer"},
@@ -84,7 +194,11 @@ class ElasticsearchProvider:
                     "inventory_quantity": {"type": "integer"},
                     "availability": {"type": "boolean"},
                     "created_at": {"type": "date"},
-                    "updated_at": {"type": "date"}
+                    "updated_at": {"type": "date"},
+                    
+                    # Config fields
+                    "config_name": {"type": "keyword"},
+                    "data": {"type": "object", "enabled": False}  # Store config data as-is
                 }
             }
         }
@@ -95,6 +209,8 @@ class ElasticsearchProvider:
         except Exception as e:
             logger.error(f"Failed to create index: {e}")
             raise
+
+    # ============= PRODUCT SEARCH METHODS =============
 
     def search_products(self, query: str = None, category: str = None, 
                        price_min: float = None, price_max: float = None,
@@ -109,7 +225,9 @@ class ElasticsearchProvider:
             "query": {
                 "bool": {
                     "must": [],
-                    "filter": []
+                    "filter": [
+                        {"term": {"type": "product"}}  # Only search products, not configs
+                    ]
                 }
             },
             "sort": [
@@ -158,7 +276,7 @@ class ElasticsearchProvider:
                 "range": {"inventory_quantity": {"gt": 0}}
             })
         
-        # If no query, match all
+        # If no query, match all products
         if not search_body["query"]["bool"]["must"]:
             search_body["query"]["bool"]["must"].append({"match_all": {}})
         
@@ -199,6 +317,10 @@ class ElasticsearchProvider:
             response = self.es.get(index=self.index_name, id=product_id)
             source = response["_source"]
             
+            # Make sure it's a product, not a config
+            if source.get("type") != "product":
+                return None
+            
             return StandardProduct(
                 id=source["product_id"],
                 title=source["title"],
@@ -230,10 +352,13 @@ class ElasticsearchProvider:
             "product_name": product.title
         }
 
+    # ============= PRODUCT INDEXING METHODS =============
+
     def index_product(self, product: StandardProduct):
         """Index a single product in Elasticsearch."""
         
         doc = {
+            "type": "product",  # NEW: mark as product
             "product_id": product.id,
             "title": product.title,
             "description": product.description or "",
@@ -265,6 +390,7 @@ class ElasticsearchProvider:
                     "_index": self.index_name,
                     "_id": product.id,
                     "_source": {
+                        "type": "product",  # NEW: mark as product
                         "product_id": product.id,
                         "title": product.title,
                         "description": product.description or "",

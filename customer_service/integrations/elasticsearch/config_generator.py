@@ -1,5 +1,5 @@
 # customer_service/integrations/elasticsearch/config_generator.py
-"""LLM-based configuration generator for Elasticsearch search setup with automatic initialization and reverse dictionary."""
+"""LLM-based configuration generator for Elasticsearch search setup with Elasticsearch storage."""
 
 import logging
 import re
@@ -7,7 +7,6 @@ import json
 import os
 from typing import List, Dict, Optional
 from abc import ABC, abstractmethod
-from pathlib import Path
 from datetime import datetime
 from google import genai
 from google.genai.types import HttpOptions
@@ -25,7 +24,7 @@ class SearchConfigGenerator(ABC):
         pass
 
 class LLMConfigGenerator(SearchConfigGenerator):
-    """Generates search configuration using LLM analysis of products with automatic initialization and reverse dictionary."""
+    """Generates search configuration using LLM analysis with Elasticsearch storage."""
     
     def __init__(self, config: Config):
         self.config = config
@@ -36,12 +35,16 @@ class LLMConfigGenerator(SearchConfigGenerator):
             location=config.CLOUD_LOCATION,
             http_options=HttpOptions(api_version="v1")
         )
-        # Path to store the generated config
-        self.config_file_path = Path(__file__).parent / "search_config.json"
-        # Path to store usage scenarios
-        self.usage_scenarios_file_path = Path(__file__).parent / "usage_scenarios.json"
-        # Path to store reverse dictionary
-        self.reverse_dict_file_path = Path(__file__).parent / "reverse_dictionary.json"
+        
+        # ES provider for config storage (lazy loaded)
+        self.es_provider = None
+    
+    def _get_es_provider(self):
+        """Get ES provider instance (lazy loading)."""
+        if not self.es_provider:
+            from .provider import ElasticsearchProvider
+            self.es_provider = ElasticsearchProvider(self.config)
+        return self.es_provider
     
     def _get_business_context(self) -> tuple[str, List[str]]:
         """Get business type and domain keywords from existing config or fallback."""
@@ -116,7 +119,7 @@ class LLMConfigGenerator(SearchConfigGenerator):
             
             logger.info(f"Generated config for {config['business_type']} business")
             
-            # Save config to JSON file
+            # Save config to Elasticsearch
             self._save_config(config)
             
             # Generate and save usage scenarios for all products
@@ -127,7 +130,7 @@ class LLMConfigGenerator(SearchConfigGenerator):
                 # Save usage scenarios
                 self._save_usage_scenarios(usage_scenarios_map)
                 
-                # NEW: Build and save reverse dictionary
+                # Build and save reverse dictionary
                 logger.info("Building reverse dictionary from usage scenarios...")
                 reverse_dict = self._build_reverse_dictionary(usage_scenarios_map)
                 self._save_reverse_dictionary(reverse_dict)
@@ -144,8 +147,9 @@ class LLMConfigGenerator(SearchConfigGenerator):
             return fallback_config
     
     def _reverse_dictionary_exists(self) -> bool:
-        """Check if reverse dictionary file exists."""
-        return self.reverse_dict_file_path.exists()
+        """Check if reverse dictionary exists in Elasticsearch."""
+        es = self._get_es_provider()
+        return es.config_exists("reverse_dictionary")
 
     def _auto_generate_usage_scenarios_and_reverse_dict(self):
         """Auto-generate both usage scenarios and reverse dictionary when config exists but they don't."""
@@ -197,10 +201,9 @@ class LLMConfigGenerator(SearchConfigGenerator):
         return reverse_dict
 
     def _save_reverse_dictionary(self, reverse_dict: Dict[str, List[str]]):
-        """Save reverse dictionary to JSON file."""
+        """Save reverse dictionary to Elasticsearch."""
         try:
-            # Ensure directory exists
-            self.reverse_dict_file_path.parent.mkdir(parents=True, exist_ok=True)
+            es = self._get_es_provider()
             
             reverse_dict_with_meta = {
                 "reverse_dictionary": reverse_dict,
@@ -209,24 +212,30 @@ class LLMConfigGenerator(SearchConfigGenerator):
                 "total_products": len(set().union(*reverse_dict.values())) if reverse_dict else 0
             }
             
-            with open(self.reverse_dict_file_path, 'w') as f:
-                json.dump(reverse_dict_with_meta, f, indent=2)
+            success = es.save_reverse_dictionary(reverse_dict_with_meta)
+            if success:
+                logger.info(f"Saved reverse dictionary to Elasticsearch")
+            else:
+                logger.error("Failed to save reverse dictionary to Elasticsearch")
                 
-            logger.info(f"Saved reverse dictionary to {self.reverse_dict_file_path}")
-            
         except Exception as e:
             logger.error(f"Error saving reverse dictionary: {e}")
 
     def load_reverse_dictionary(self) -> Optional[Dict[str, List[str]]]:
-        """Load existing reverse dictionary from JSON file."""
+        """Load existing reverse dictionary from Elasticsearch."""
         try:
-            if self.reverse_dict_file_path.exists():
-                with open(self.reverse_dict_file_path, 'r') as f:
-                    data = json.load(f)
-                
-                reverse_dict = data.get("reverse_dictionary", {})
+            es = self._get_es_provider()
+            data = es.load_reverse_dictionary()
+            
+            if data and "reverse_dictionary" in data:
+                reverse_dict = data["reverse_dictionary"]
                 logger.info(f"Loaded reverse dictionary with {len(reverse_dict)} problem keywords")
                 return reverse_dict
+            elif data:
+                # Handle legacy format
+                logger.info(f"Loaded reverse dictionary (legacy format) with {len(data)} problem keywords")
+                return data
+                
         except Exception as e:
             logger.error(f"Error loading reverse dictionary: {e}")
         return None
@@ -467,29 +476,28 @@ class LLMConfigGenerator(SearchConfigGenerator):
         return all_usage_scenarios
     
     def load_usage_scenarios(self) -> Optional[Dict[str, List[str]]]:
-        """Load existing usage scenarios from JSON file."""
+        """Load existing usage scenarios from Elasticsearch."""
         try:
-            if self.usage_scenarios_file_path.exists():
-                with open(self.usage_scenarios_file_path, 'r') as f:
-                    data = json.load(f)
-                
-                # Handle both old format (direct dict) and new format (with metadata)
-                if "scenarios" in data:
-                    scenarios = data["scenarios"]
-                else:
-                    scenarios = data
-                    
+            es = self._get_es_provider()
+            data = es.load_usage_scenarios()
+            
+            if data and "scenarios" in data:
+                scenarios = data["scenarios"]
                 logger.info(f"Loaded existing usage scenarios for {len(scenarios)} products")
                 return scenarios
+            elif data:
+                # Handle legacy format (direct dict)
+                logger.info(f"Loaded existing usage scenarios (legacy format) for {len(data)} products")
+                return data
+                
         except Exception as e:
             logger.error(f"Error loading usage scenarios: {e}")
         return None
     
     def _save_usage_scenarios(self, scenarios: Dict[str, List[str]]):
-        """Save usage scenarios to JSON file."""
+        """Save usage scenarios to Elasticsearch."""
         try:
-            # Ensure directory exists
-            self.usage_scenarios_file_path.parent.mkdir(parents=True, exist_ok=True)
+            es = self._get_es_provider()
             
             # Save scenarios with timestamp
             scenarios_with_meta = {
@@ -498,17 +506,19 @@ class LLMConfigGenerator(SearchConfigGenerator):
                 "product_count": len(scenarios)
             }
             
-            with open(self.usage_scenarios_file_path, 'w') as f:
-                json.dump(scenarios_with_meta, f, indent=2)
+            success = es.save_usage_scenarios(scenarios_with_meta)
+            if success:
+                logger.info(f"Saved usage scenarios to Elasticsearch")
+            else:
+                logger.error("Failed to save usage scenarios to Elasticsearch")
                 
-            logger.info(f"Saved usage scenarios to {self.usage_scenarios_file_path}")
-            
         except Exception as e:
             logger.error(f"Error saving usage scenarios: {e}")
     
     def usage_scenarios_exist(self) -> bool:
-        """Check if usage scenarios file exists."""
-        return self.usage_scenarios_file_path.exists()
+        """Check if usage scenarios exist in Elasticsearch."""
+        es = self._get_es_provider()
+        return es.config_exists("usage_scenarios")
     
     def _generate_index_name(self, products: List[StandardProduct]) -> str:
         """Generate index name from categories or LLM analysis."""
@@ -721,22 +731,21 @@ class LLMConfigGenerator(SearchConfigGenerator):
         }
     
     def load_config(self) -> Optional[Dict]:
-        """Load existing search config from JSON file."""
+        """Load existing search config from Elasticsearch."""
         try:
-            if self.config_file_path.exists():
-                with open(self.config_file_path, 'r') as f:
-                    config = json.load(f)
+            es = self._get_es_provider()
+            config = es.load_search_config()
+            if config:
                 logger.info(f"Loaded existing search config: {config.get('business_type', 'unknown')}")
-                return config
+            return config
         except Exception as e:
             logger.error(f"Error loading search config: {e}")
         return None
     
     def _save_config(self, config: Dict):
-        """Save generated config to JSON file."""
+        """Save generated config to Elasticsearch."""
         try:
-            # Ensure directory exists
-            self.config_file_path.parent.mkdir(parents=True, exist_ok=True)
+            es = self._get_es_provider()
             
             # Save config with timestamp
             config_with_meta = {
@@ -745,27 +754,42 @@ class LLMConfigGenerator(SearchConfigGenerator):
                 "product_count_analyzed": 30
             }
             
-            with open(self.config_file_path, 'w') as f:
-                json.dump(config_with_meta, f, indent=2)
+            success = es.save_search_config(config_with_meta)
+            if success:
+                logger.info(f"Saved search config to Elasticsearch")
+            else:
+                logger.error("Failed to save search config to Elasticsearch")
                 
-            logger.info(f"Saved search config to {self.config_file_path}")
-            
         except Exception as e:
             logger.error(f"Error saving search config: {e}")
     
     def config_exists(self) -> bool:
-        """Check if search config file exists."""
-        return self.config_file_path.exists()
+        """Check if search config exists in Elasticsearch."""
+        es = self._get_es_provider()
+        return es.config_exists("search_config")
     
     def regenerate_config(self, sample_products: List[StandardProduct] = None) -> Dict:
-        """Force regeneration of config (ignores existing file)."""
+        """Force regeneration of config (ignores existing stored configs)."""
         logger.info("Force regenerating search config...")
-        # Delete existing files
-        if self.config_file_path.exists():
-            self.config_file_path.unlink()
-        if self.usage_scenarios_file_path.exists():
-            self.usage_scenarios_file_path.unlink()
-        if self.reverse_dict_file_path.exists():
-            self.reverse_dict_file_path.unlink()
+        # Note: We don't delete ES documents here, just skip the existence check
+        # The new config will overwrite the old ones
         
-        return self.generate_config(sample_products)
+        # Temporarily disable config existence checks
+        original_config_exists = self.config_exists
+        original_usage_scenarios_exist = self.usage_scenarios_exist
+        original_reverse_dictionary_exists = self._reverse_dictionary_exists
+        
+        # Mock methods to return False during regeneration
+        self.config_exists = lambda: False
+        self.usage_scenarios_exist = lambda: False
+        self._reverse_dictionary_exists = lambda: False
+        
+        try:
+            result = self.generate_config(sample_products)
+        finally:
+            # Restore original methods
+            self.config_exists = original_config_exists
+            self.usage_scenarios_exist = original_usage_scenarios_exist
+            self._reverse_dictionary_exists = original_reverse_dictionary_exists
+        
+        return result

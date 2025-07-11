@@ -3,5 +3,6 @@ pydantic
 elasticsearch>=8.0.0,<9.0.0
 fastapi
 uvicorn
-openai
-../customer_service # Local package dependency
+google-cloud-aiplatform[adk,agent_engine]
+google-adk
+google-genai
