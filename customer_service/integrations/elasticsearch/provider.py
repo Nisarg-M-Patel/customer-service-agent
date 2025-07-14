@@ -18,7 +18,10 @@ class ElasticsearchProvider:
         self.config = config
         
         # Initialize Elasticsearch client
-        self.es = Elasticsearch([config.ELASTICSEARCH_URL])
+        self.es = Elasticsearch(
+            [config.ELASTICSEARCH_URL],
+            basic_auth=(config.ELASTICSEARCH_USER, config.ELASTICSEARCH_PASSWORD)
+        )
         
         # Load search configuration (lazy to avoid circular imports)
         self.search_config = None

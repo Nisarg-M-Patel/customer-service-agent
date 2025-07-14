@@ -18,3 +18,7 @@ steps:
       '--allow-unauthenticated',
       '--memory', '2Gi'
     ]
+
+serviceAccount: 'projects/elite-coral-463917-b1/serviceAccounts/cloud-build-sa@elite-coral-463917-b1.iam.gserviceaccount.com'
+options:
+  logging: CLOUD_LOGGING_ONLY

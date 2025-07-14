@@ -17,7 +17,7 @@ class Config(BaseSettings):
     
     model_config = SettingsConfigDict(
         env_file=".env",
-        env_prefix="GOOGLE_",
+        env_prefix="",
         case_sensitive=True,
         env_file_encoding='utf-8',
         extra='ignore'
@@ -25,11 +25,11 @@ class Config(BaseSettings):
     
     agent_settings: AgentModel = Field(default=AgentModel())
     app_name: str = "customer_service_app"
-    CLOUD_PROJECT: str = Field(default="my_project")
-    CLOUD_LOCATION: str = Field(default="us-central1")
-    GENAI_USE_VERTEXAI: str = Field(default="1")
-    API_KEY: str | None = Field(default="")
-    
+    CLOUD_PROJECT: str = Field(default="elite-coral-463917-b1", alias="GOOGLE_CLOUD_PROJECT")
+    CLOUD_LOCATION: str = Field(default="us-central1", alias="GOOGLE_CLOUD_LOCATION") 
+    GENAI_USE_VERTEXAI: str = Field(default="1", alias="GOOGLE_GENAI_USE_VERTEXAI")
+    API_KEY: str | None = Field(default="", alias="GOOGLE_API_KEY")
+        
     # Integration settings
     INTEGRATION_MODE: str = Field(default="mock")  # "mock", "elasticsearch", "shopify"
     DATABASE_URL: str = Field(default="sqlite:///customer_service.db")
