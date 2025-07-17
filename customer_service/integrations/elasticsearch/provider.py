@@ -35,7 +35,7 @@ class ElasticsearchProvider:
 
     def _initialize_search_config(self):
         """Initialize search config with lazy loading to avoid circular imports."""
-        
+        self.index_name = f"store_{self.config.BUSINESS_ID}_products"
         # First try to load existing config
         self.search_config = self.load_search_config()
         
@@ -43,12 +43,11 @@ class ElasticsearchProvider:
             logger.info("No search config found, using fallback for startup...")
             self.search_config = self._get_fallback_config()
         
-        self.index_name = self.search_config["index_name"]
 
     def _get_fallback_config(self):
         """Fallback configuration for startup."""
         return {
-            "index_name": "products",
+            "index_name": self.index_name,
             "business_type": "general", 
             "searchable_fields": {
                 "title": {"weight": 3.0, "fuzzy": True},
@@ -73,13 +72,15 @@ class ElasticsearchProvider:
             doc = {
                 "type": "config",
                 "config_name": config_name,
+                "business_id": self.config.BUSINESS_ID,
                 "data": data,
                 "updated_at": datetime.now().isoformat()
             }
-            
+            config_id = f"config_{self.config.BUSINESS_ID}_{config_name}"
+
             self.es.index(
                 index=self.index_name,
-                id=f"config_{config_name}",
+                id=config_id,
                 body=doc
             )
             

@@ -39,6 +39,7 @@ class Config(BaseSettings):
     ELASTICSEARCH_USER: str | None = Field(default="elastic")
     ELASTICSEARCH_PASSWORD: str | None = Field(default="elastic-mvp-2024")
     ELASTICSEARCH_VERIFY_CERTS: bool = Field(default=True)
+    BUSINESS_ID: str = Field(...)
     
     # Shopify settings (for syncing data to Elasticsearch)
     SHOPIFY_SHOP_URL: str | None = Field(default=None)
