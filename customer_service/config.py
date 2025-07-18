@@ -35,7 +35,7 @@ class Config(BaseSettings):
     DATABASE_URL: str = Field(default="sqlite:///customer_service.db")
     
     # Elasticsearch settings
-    ELASTICSEARCH_URL: str = Field(default="http://34.63.210.51:9200")
+    ELASTICSEARCH_URL: str = Field(default="http://34.171.135.203:9200")
     ELASTICSEARCH_USER: str | None = Field(default="elastic")
     ELASTICSEARCH_PASSWORD: str | None = Field(default="elastic-mvp-2024")
     ELASTICSEARCH_VERIFY_CERTS: bool = Field(default=True)

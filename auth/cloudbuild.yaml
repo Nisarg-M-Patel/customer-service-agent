@@ -1,0 +1,25 @@
+steps:
+  # Build the auth server image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/auth', '.']
+  
+  # Push to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/auth']
+  
+  # Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args: [
+      'run', 'deploy', 'auth',
+      '--image', 'gcr.io/$PROJECT_ID/auth',
+      '--platform', 'managed',
+      '--region', 'us-central1',
+      '--allow-unauthenticated',
+      '--memory', '2Gi',
+      '--set-env-vars', 'GOOGLE_CLOUD_PROJECT=$PROJECT_ID'
+    ]
+
+serviceAccount: 'projects/elite-coral-463917-b1/serviceAccounts/cloud-build-sa@elite-coral-463917-b1.iam.gserviceaccount.com'
+options:
+  logging: CLOUD_LOGGING_ONLY
